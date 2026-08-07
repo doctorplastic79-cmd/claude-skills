@@ -9,6 +9,10 @@ riutilizzabili e non appesantiscono il codice delle applicazioni.
 |---|---|
 | `skills/video-shotcraft` | video promo di prodotto con Remotion: 104 shot recipe cards, gallery di anteprime, template completo, 5 BGM e 149 SFX |
 
+| Preset | A cosa serve |
+|---|---|
+| `presets/social-verticale` | reel 1080x1920 da foto e video propri, per Instagram, TikTok e Storie |
+
 ---
 
 ## Dove una skill viene vista
