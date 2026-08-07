@@ -7,6 +7,7 @@ riutilizzabili e non appesantiscono il codice delle applicazioni.
 
 | Skill | A cosa serve |
 |---|---|
+| `skills/find-skills` | scoperta e installazione di skill dall'ecosistema aperto (skills.sh) tramite la CLI `npx skills` |
 | `skills/video-shotcraft` | video promo di prodotto con Remotion: 104 shot recipe cards, gallery di anteprime, template completo, 5 BGM e 149 SFX |
 
 | Preset | A cosa serve |
@@ -120,6 +121,7 @@ voce in `.claude-plugin/marketplace.json`.
 
 Ogni skill mantiene la licenza originale, nel file `LICENSE` della sua cartella.
 
+- `find-skills` — MIT, di [vercel-labs/skills](https://github.com/vercel-labs/skills).
 - `video-shotcraft` — Apache-2.0, di [Vincentwei1021](https://github.com/Vincentwei1021/video-shotcraft).
   Gli asset audio hanno licenze proprie, elencate in
   `skills/video-shotcraft/assets/audio/ATTRIBUTION.md`.

@@ -5,6 +5,11 @@
   },
   "plugins": [
     {
+      "name": "find-skills",
+      "source": "./skills/find-skills",
+      "description": "Scoperta e installazione di skill dall'ecosistema aperto (skills.sh) tramite la CLI npx skills."
+    },
+    {
       "name": "video-shotcraft",
       "source": "./skills/video-shotcraft",
       "description": "Video promo di prodotto con Remotion: 104 shot recipe cards, gallery di anteprime, template completo, 5 BGM e 149 SFX."
