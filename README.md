@@ -31,6 +31,31 @@ a mano sul tuo Mac non ci arriva.
 
 ## Installare
 
+### Come skill del tuo account claude.ai — ovunque, senza configurazione
+
+È l'unica strada che copre tutto: le skill abilitate sull'account vengono
+sincronizzate all'avvio di ogni sessione, cloud e Cowork comprese.
+
+L'upload però ha due limiti: meno di 30 MB non compressi e un tetto al numero
+di file. `video-shotcraft` sfora entrambi (49 MB, ~660 file), quindi si carica
+il **loader** in `bootstrap/video-shotcraft/`: un solo `SKILL.md` che al primo
+uso clona la libreria completa in `~/.cache/video-shotcraft` e poi la segue.
+
+```bash
+cd bootstrap && zip -r video-shotcraft.zip video-shotcraft/
+```
+
+Poi su claude.ai: *Impostazioni → Capacità → Skill → Carica skill*.
+
+Il `description` nel frontmatter è identico all'originale, quindi la skill si
+attiva sulle stesse richieste. Clona dal repository pubblico originale, non da
+questo, così non serve rendere pubblica questa repo. Serve accesso di rete a
+`github.com`, incluso nel livello *Trusted*; senza rete il loader si ferma e lo
+dice, invece di improvvisare i risultati.
+
+Con questa strada non si perde niente: arrivano anche le 5 tracce BGM che il
+pacchetto ridotto di `package-for-claude-ai.sh` deve lasciare fuori.
+
 ### In locale, per tutti i progetti
 
 ```bash
