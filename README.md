@@ -9,30 +9,83 @@ riutilizzabili e non appesantiscono il codice delle applicazioni.
 |---|---|
 | `skills/video-shotcraft` | video promo di prodotto con Remotion: 104 shot recipe cards, gallery di anteprime, template completo, 5 BGM e 149 SFX |
 
-## Installare una skill
+---
 
-**Claude Code in locale** (Mac, CLI o app desktop) — cloni una volta e colleghi:
+## Dove una skill viene vista
+
+Claude Code cerca le skill in tre posti diversi, e da quale la installi dipende
+"dove si vede":
+
+| Posizione | Dove è attiva |
+|---|---|
+| `~/.claude/skills/` | **ovunque** — ogni progetto, ogni sessione, locale e cloud |
+| `<progetto>/.claude/skills/` | solo nelle sessioni aperte su quel repository |
+| plugin installato da un marketplace | ovunque in locale, con aggiornamenti |
+
+Le sessioni su claude.ai/code partono da un container nuovo: dentro ci finiscono
+le skill del tuo account claude.ai (quelle caricate da *Impostazioni → Capacità →
+Skill*) e quelle del repository su cui stai lavorando. Quello che hai installato
+a mano sul tuo Mac non ci arriva.
+
+---
+
+## Installare
+
+### In locale, per tutti i progetti
 
 ```bash
 git clone https://github.com/doctorplastic79-cmd/claude-skills.git
-mkdir -p ~/.claude/skills
-ln -s "$(pwd)/claude-skills/skills/video-shotcraft" ~/.claude/skills/video-shotcraft
+cd claude-skills && ./install.sh
 ```
 
-Da quel momento la skill è disponibile in ogni sessione, su qualsiasi progetto.
-Per Codex il percorso è `~/.codex/skills/` invece di `~/.claude/skills/`.
+Copia ogni skill in `~/.claude/skills/`. Per aggiornare: `git pull && ./install.sh`.
+Per Codex: `CLAUDE_SKILLS_DIR=~/.codex/skills ./install.sh`.
 
-**Claude Code sul web** — le sessioni remote caricano solo le skill che stanno
-nel repository su cui stai lavorando, in `.claude/skills/`. Una skill che vive
-qui non viene vista automaticamente da una sessione aperta su un altro repo:
-va copiata in quel repo, oppure la chiedi alla sessione e la reinstalla al volo
-da questo repository.
+### In locale, come plugin (con aggiornamenti)
+
+```
+/plugin marketplace add doctorplastic79-cmd/claude-skills
+/plugin install video-shotcraft@doctorplastic-skills
+```
+
+Scegli lo scope utente e la skill vale per tutti i progetti.
+`/plugin marketplace update` porta le novità. Funziona solo dal CLI:
+nelle sessioni web il comando `/plugin` non esiste.
+
+### Nelle sessioni cloud (claude.ai/code), per ogni repository
+
+Nelle impostazioni del cloud environment, campo **Setup script**:
+
+```bash
+#!/bin/bash
+git clone --depth 1 https://github.com/doctorplastic79-cmd/claude-skills.git \
+  /opt/claude-skills || true
+/opt/claude-skills/install.sh || true
+```
+
+Gira come root prima che Claude Code parta, e il risultato viene messo in cache
+come snapshot del filesystem: si esegue una volta sola, non a ogni sessione.
+Da quel momento la skill c'è in ogni sessione cloud di quell'environment,
+qualunque repository tu stia usando.
+
+Perché funzioni la repo deve essere **pubblica**: il setup script parte prima
+che la sessione riceva le credenziali git, quindi un `clone` di una repo privata
+fallisce. `github.com` è già fra i domini permessi dal livello di rete *Trusted*.
+
+### In un singolo repository
+
+Copia la cartella della skill in `<repo>/.claude/skills/`. Serve solo se vuoi
+che la skill valga per quel progetto e per chi ci lavora, e mettilo in conto:
+`video-shotcraft` pesa 49 MB, che ogni clone e ogni build CI si porta dietro.
+
+---
 
 ## Aggiungere una skill
 
 Una skill è una cartella con dentro un `SKILL.md` che apre con un frontmatter
 `name` + `description`: è la descrizione che decide quando l'agente la usa.
-Metti la cartella sotto `skills/` e aggiungi una riga alla tabella qui sopra.
+Metti la cartella sotto `skills/`, aggiungi una riga alla tabella in cima e una
+voce in `.claude-plugin/marketplace.json`.
 
 ## Licenze
 

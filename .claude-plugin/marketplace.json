@@ -1,0 +1,13 @@
+{
+  "name": "doctorplastic-skills",
+  "owner": {
+    "name": "doctorplastic79-cmd"
+  },
+  "plugins": [
+    {
+      "name": "video-shotcraft",
+      "source": "./skills/video-shotcraft",
+      "description": "Video promo di prodotto con Remotion: 104 shot recipe cards, gallery di anteprime, template completo, 5 BGM e 149 SFX."
+    }
+  ]
+}
