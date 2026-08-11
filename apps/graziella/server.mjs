@@ -261,13 +261,28 @@ async function handleChat(req, res) {
   const canale = body.canale === 'testo' ? 'testo' : 'voce';
   const system = await buildSystem({ operatore: body.operatore, canale });
 
+  // Con l'interruzione a voce il browser chiude questa richiesta molto più
+  // spesso di prima (ogni volta che qualcuno le parla sopra): senza questa
+  // guardia, scrivere su una connessione già chiusa manda in crash il server.
+  let chiusa = false;
+  res.on('close', () => {
+    chiusa = true;
+  });
+
   res.writeHead(200, {
     'content-type': 'text/event-stream; charset=utf-8',
     'cache-control': 'no-cache, no-transform',
     connection: 'keep-alive',
     'x-accel-buffering': 'no',
   });
-  const emit = (event, data) => res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+  const emit = (event, data) => {
+    if (chiusa) return;
+    try {
+      res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+    } catch {
+      chiusa = true;
+    }
+  };
 
   try {
     const upstream = await callClaude({
@@ -278,6 +293,10 @@ async function handleChat(req, res) {
       stream: true,
     });
     for await (const part of streamText(upstream)) {
+      if (chiusa) {
+        upstream.body?.cancel?.().catch(() => {}); // interrotta: non generare oltre, si spreca solo
+        break;
+      }
       if (part.text) emit('delta', { text: part.text });
       else if (part.error) emit('error', { error: part.error });
     }
@@ -285,7 +304,7 @@ async function handleChat(req, res) {
   } catch (err) {
     emit('error', { error: err.message });
   }
-  res.end();
+  if (!chiusa) res.end();
 }
 
 async function handleDocumento(req, res) {

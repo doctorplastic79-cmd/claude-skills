@@ -319,10 +319,11 @@ const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
 const SILENZIO_MS = 1200;
 
 class AscoltoBrowser {
-  constructor({ onFrase, onInterim, onStato }) {
+  constructor({ onFrase, onInterim, onStato, onAttivita }) {
     this.onFrase = onFrase;
     this.onInterim = onInterim;
     this.onStato = onStato;
+    this.onAttivita = onAttivita;
     this.attivo = false;
     this.pendente = '';
     this.timer = null;
@@ -342,12 +343,18 @@ class AscoltoBrowser {
     rec.interimResults = true;
     rec.onresult = (e) => {
       let interim = '';
+      let vociva = false;
       for (let i = e.resultIndex; i < e.results.length; i++) {
         const r = e.results[i];
-        if (r.isFinal) this.pendente += `${r[0].transcript.trim()} `;
-        else interim += r[0].transcript;
+        const testo = r[0].transcript;
+        if (r.isFinal) this.pendente += `${testo.trim()} `;
+        else interim += testo;
+        if (testo.trim().length >= 2) vociva = true;
       }
       this.onInterim(this.pendente + interim);
+      // parla per davvero (non un rumore isolato): se Graziella sta ancora
+      // parlando o pensando, questo è il segnale per farla smettere e ascoltare
+      if (vociva) this.onAttivita?.();
       clearTimeout(this.timer);
       this.timer = setTimeout(() => this.chiudiFrase(), SILENZIO_MS);
     };
@@ -472,11 +479,23 @@ class AscoltoRegistrato {
 }
 
 let ascolto = null;
+let controllerAttuale = null; // richiesta /api/chat in corso, se Graziella sta rispondendo
+
+// Interrompe Graziella a metà: ferma la voce e annulla la risposta che stava
+// arrivando. Sicura da chiamare anche quando non sta succedendo niente.
+function interrompiRisposta() {
+  voce.taci();
+  if (controllerAttuale) controllerAttuale.abort();
+}
 
 function creaAscolto() {
   const opzioni = {
     onFrase: (frase) => inviaTurno(frase),
     onInterim: (t) => (el.interim.textContent = t),
+    onAttivita: () => {
+      // stai parlando davvero: se Graziella sta rispondendo o parlando, si ferma
+      if (S.inAttesa || voce.occupata) interrompiRisposta();
+    },
     onStato: (s) => {
       if (s === 'negato') {
         S.micAttivo = false;
@@ -521,7 +540,7 @@ function avviaAscolto() {
     );
     return;
   }
-  voce.taci();
+  interrompiRisposta();
   S.micAttivo = true;
   ascolto.avvia();
 }
@@ -553,8 +572,12 @@ async function inviaTurno(testo) {
   const contenuto = testo.trim();
   if (!contenuto || S.inAttesa) return;
 
+  // in modalità automatica con conversazione continua il microfono resta
+  // acceso anche mentre Graziella pensa e parla: è quello che permette di
+  // interromperla parlandole sopra, come in una telefonata vera.
+  const ascoltoContinuo = S.modoStt === 'auto' && S.maniLibere;
   const eraInAscolto = S.micAttivo;
-  if (eraInAscolto) fermaAscolto(); // il microfono resta chiuso mentre Graziella risponde
+  if (eraInAscolto && !ascoltoContinuo) fermaAscolto();
 
   S.inAttesa = true;
   el.interim.textContent = '';
@@ -565,8 +588,12 @@ async function inviaTurno(testo) {
   const corpo = aggiungiBolla('assistant', '');
   corpo.parentElement.classList.add('scrive');
   let risposta = '';
+  let interrotta = false;
   bufferVoce = '';
   voce.apriStream();
+
+  const controller = new AbortController();
+  controllerAttuale = controller;
 
   try {
     const res = await api('/api/chat', {
@@ -577,6 +604,7 @@ async function inviaTurno(testo) {
         operatore: S.operatore,
         canale: 'voce',
       }),
+      signal: controller.signal,
     });
     if (!res.ok) {
       const dato = await res.json().catch(() => ({}));
@@ -614,29 +642,39 @@ async function inviaTurno(testo) {
         }
       }
     }
-    corpo.parentElement.classList.remove('scrive');
     svuotaBufferVoce(true);
     if (errore) throw new Error(errore);
     if (!risposta.trim()) throw new Error('risposta vuota dal modello');
-    S.messaggi.push({ role: 'assistant', content: risposta });
-    aggiornaFinalita();
-    salvaSessione();
   } catch (err) {
-    corpo.parentElement.remove();
-    aggiungiBolla('assistant', `Non sono riuscita a rispondere: ${err.message}`, 'errore');
-    S.messaggi.pop(); // togli il turno utente rimasto senza risposta
+    if (err.name === 'AbortError') {
+      interrotta = true; // interruzione voluta: non è un errore da segnalare
+    } else if (!risposta.trim()) {
+      corpo.parentElement.remove();
+      aggiungiBolla('assistant', `Non sono riuscita a rispondere: ${err.message}`, 'errore');
+      S.messaggi.pop(); // togli il turno utente rimasto senza risposta
+    }
   } finally {
+    corpo.parentElement.classList.remove('scrive');
+    if (risposta.trim()) {
+      S.messaggi.push({ role: 'assistant', content: risposta });
+      aggiornaFinalita();
+      salvaSessione();
+    } else if (interrotta && corpo.parentElement.isConnected) {
+      corpo.parentElement.remove(); // interrotta prima che arrivasse una sola parola
+    }
+    controllerAttuale = null;
     S.inAttesa = false;
     voce.chiudiStream();
-    if (!voce.occupata) riprendiDopoVoce(eraInAscolto);
-    else voce.onFine = () => riprendiDopoVoce(eraInAscolto);
+    const riprendi = ascoltoContinuo || eraInAscolto;
+    if (!voce.occupata) riprendiDopoVoce(riprendi);
+    else voce.onFine = () => riprendiDopoVoce(riprendi);
   }
 }
 
 function riprendiDopoVoce(eraInAscolto) {
   voce.onFine = null;
   if (S.inAttesa) return;
-  if (S.micAttivo) return statoVoce('ascolto'); // l'utente ha già ripreso a parlare
+  if (S.micAttivo) return statoVoce('ascolto'); // il microfono non si è mai fermato
   if (eraInAscolto && S.maniLibere) avviaAscolto();
   else statoVoce('spento');
 }
@@ -664,7 +702,7 @@ function costruisciFinalita() {
 }
 
 async function produciDocumento(finalita) {
-  voce.taci();
+  interrompiRisposta();
   fermaAscolto();
   statoVoce('spento');
   S.documento = null;
@@ -780,7 +818,7 @@ async function caricaSessioni() {
 async function riprendiSessione(id) {
   try {
     const dato = await apiJson(`/api/sessione/${encodeURIComponent(id)}`);
-    voce.taci();
+    interrompiRisposta();
     fermaAscolto({ scarta: true });
     S.sessionId = dato.id;
     pref.set('sessione', S.sessionId);
@@ -795,7 +833,7 @@ async function riprendiSessione(id) {
 }
 
 function nuovaConversazione() {
-  voce.taci();
+  interrompiRisposta();
   fermaAscolto({ scarta: true });
   S.messaggi = [];
   S.sessionId = `s-${Date.now().toString(36)}`;
@@ -918,7 +956,6 @@ async function avvio() {
 // ------------------------------------------------------------- eventi
 
 el.mic.addEventListener('click', () => {
-  if (S.inAttesa) return;
   if (S.modoStt === 'registra' && ascolto?.attivo) {
     fermaAscolto(); // secondo click: chiude la registrazione e la manda a trascrivere
     return;
@@ -928,12 +965,11 @@ el.mic.addEventListener('click', () => {
     fermaAscolto();
     return;
   }
-  if (voce.occupata) voce.taci();
-  avviaAscolto();
+  avviaAscolto(); // interrompe da sola una risposta in corso, se c'è
 });
 
 el.stopVoce.addEventListener('click', () => {
-  voce.taci();
+  interrompiRisposta();
   if (!S.micAttivo) statoVoce('spento');
 });
 
@@ -1052,7 +1088,7 @@ document.addEventListener('keydown', (e) => {
     e.preventDefault();
     el.mic.click();
   }
-  if (e.key === 'Escape' && voce.occupata) voce.taci();
+  if (e.key === 'Escape' && (voce.occupata || S.inAttesa)) interrompiRisposta();
 });
 
 window.addEventListener('beforeunload', () => voce.taci());
