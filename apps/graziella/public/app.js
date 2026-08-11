@@ -59,6 +59,7 @@ const S = {
   voceScelta: pref.get('voce', ''),
   vociBrowser: [],
   vociEleven: [],
+  vocePredefinitaEleven: '',
   documento: null,
 };
 pref.set('sessione', S.sessionId);
@@ -877,7 +878,13 @@ function costruisciVoci() {
 
   const disponibili = [...el.voce.options].map((o) => o.value);
   if (!disponibili.includes(S.voceScelta)) {
-    S.voceScelta = S.vociEleven.length ? `eleven:${S.vociEleven[0].id}` : vociBrowserPreferita();
+    const preferitaDisponibile =
+      S.vocePredefinitaEleven && S.vociEleven.some((v) => v.id === S.vocePredefinitaEleven);
+    S.voceScelta = preferitaDisponibile
+      ? `eleven:${S.vocePredefinitaEleven}`
+      : S.vociEleven.length
+        ? `eleven:${S.vociEleven[0].id}`
+        : vociBrowserPreferita();
     pref.set('voce', S.voceScelta);
   }
   el.voce.value = S.voceScelta;
@@ -916,8 +923,9 @@ async function avvio() {
 
   if (S.config.elevenlabs) {
     try {
-      const { voci } = await apiJson('/api/tts/voci');
+      const { voci, predefinita } = await apiJson('/api/tts/voci');
       S.vociEleven = voci || [];
+      S.vocePredefinitaEleven = predefinita || '';
     } catch (err) {
       console.warn('[voci]', err.message);
     }

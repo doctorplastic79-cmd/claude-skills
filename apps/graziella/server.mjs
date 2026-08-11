@@ -58,6 +58,7 @@ const ACCESS_CODE = process.env.GRAZIELLA_ACCESS_CODE || '';
 const EL_KEY = process.env.ELEVENLABS_API_KEY || '';
 const EL_TTS_MODEL = process.env.ELEVENLABS_TTS_MODEL || 'eleven_multilingual_v2';
 const EL_STT_MODEL = process.env.ELEVENLABS_STT_MODEL || 'scribe_v1';
+const EL_VOCE_PREDEFINITA = process.env.ELEVENLABS_VOICE_ID || 'DVR8HkJ1RuPcPSuAW7Q9';
 const MAX_BODY = 2 * 1024 * 1024;
 const MAX_AUDIO = 20 * 1024 * 1024;
 
@@ -461,7 +462,23 @@ async function handleVoci(res) {
       genere: v.labels?.gender || '',
       lingua: v.labels?.language || v.fine_tuning?.language || '',
     }));
-    sendJson(res, 200, { voci });
+    // La voce di Graziella è fissa: se non è tra quelle salvate nell'account
+    // (es. è una voce condivisa non aggiunta alla libreria), la recuperiamo
+    // a parte così compare comunque nell'elenco ed è selezionabile.
+    if (EL_VOCE_PREDEFINITA && !voci.some((v) => v.id === EL_VOCE_PREDEFINITA)) {
+      const dettaglio = await fetch(`https://api.elevenlabs.io/v1/voices/${EL_VOCE_PREDEFINITA}`, {
+        headers: { 'xi-api-key': EL_KEY },
+      })
+        .then((r) => (r.ok ? r.json() : null))
+        .catch(() => null);
+      voci.unshift({
+        id: EL_VOCE_PREDEFINITA,
+        nome: dettaglio?.name || 'Graziella',
+        genere: dettaglio?.labels?.gender || '',
+        lingua: dettaglio?.labels?.language || '',
+      });
+    }
+    sendJson(res, 200, { voci, predefinita: EL_VOCE_PREDEFINITA });
   } catch (err) {
     sendJson(res, 200, { voci: [], error: err.message });
   }
