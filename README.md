@@ -13,6 +13,10 @@ riutilizzabili e non appesantiscono il codice delle applicazioni.
 |---|---|
 | `presets/social-verticale` | reel 1080x1920 da foto e video propri, per Instagram, TikTok e Storie |
 
+| App | A cosa serve |
+|---|---|
+| `apps/graziella` | Direzione Generale vocale di InFormaMedica: conversazione a voce che si chiude in memo, verbali, procedure e messaggi pronti |
+
 ---
 
 ## Dove una skill viene vista
