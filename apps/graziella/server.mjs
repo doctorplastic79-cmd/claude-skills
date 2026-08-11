@@ -452,36 +452,30 @@ async function handleTts(req, res) {
 
 async function handleVoci(res) {
   if (!EL_KEY) return sendJson(res, 200, { voci: [] });
+  // La voce di Graziella è fissa (ELEVENLABS_VOICE_ID): niente scelta fra le
+  // voci ElevenLabs dell'account, solo questa. Recuperiamo il suo nome per
+  // mostrarlo nel menu; se la richiesta fallisce si usa comunque quell'id,
+  // solo con un'etichetta generica.
+  let nome = 'Graziella';
+  let genere = '';
+  let lingua = '';
   try {
-    const upstream = await fetch('https://api.elevenlabs.io/v1/voices', { headers: { 'xi-api-key': EL_KEY } });
-    if (!upstream.ok) return sendJson(res, 200, { voci: [], error: `ElevenLabs ${upstream.status}` });
-    const data = await upstream.json();
-    const voci = (data.voices || []).map((v) => ({
-      id: v.voice_id,
-      nome: v.name,
-      genere: v.labels?.gender || '',
-      lingua: v.labels?.language || v.fine_tuning?.language || '',
-    }));
-    // La voce di Graziella è fissa: se non è tra quelle salvate nell'account
-    // (es. è una voce condivisa non aggiunta alla libreria), la recuperiamo
-    // a parte così compare comunque nell'elenco ed è selezionabile.
-    if (EL_VOCE_PREDEFINITA && !voci.some((v) => v.id === EL_VOCE_PREDEFINITA)) {
-      const dettaglio = await fetch(`https://api.elevenlabs.io/v1/voices/${EL_VOCE_PREDEFINITA}`, {
-        headers: { 'xi-api-key': EL_KEY },
-      })
-        .then((r) => (r.ok ? r.json() : null))
-        .catch(() => null);
-      voci.unshift({
-        id: EL_VOCE_PREDEFINITA,
-        nome: dettaglio?.name || 'Graziella',
-        genere: dettaglio?.labels?.gender || '',
-        lingua: dettaglio?.labels?.language || '',
-      });
+    const upstream = await fetch(`https://api.elevenlabs.io/v1/voices/${EL_VOCE_PREDEFINITA}`, {
+      headers: { 'xi-api-key': EL_KEY },
+    });
+    if (upstream.ok) {
+      const v = await upstream.json();
+      nome = v.name || nome;
+      genere = v.labels?.gender || '';
+      lingua = v.labels?.language || v.fine_tuning?.language || '';
     }
-    sendJson(res, 200, { voci, predefinita: EL_VOCE_PREDEFINITA });
-  } catch (err) {
-    sendJson(res, 200, { voci: [], error: err.message });
+  } catch {
+    /* la voce fissa resta comunque usabile per il TTS anche senza questi dettagli */
   }
+  sendJson(res, 200, {
+    voci: [{ id: EL_VOCE_PREDEFINITA, nome, genere, lingua }],
+    predefinita: EL_VOCE_PREDEFINITA,
+  });
 }
 
 async function handleStt(req, res) {

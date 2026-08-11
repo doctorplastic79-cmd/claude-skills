@@ -39,7 +39,7 @@ prima di ogni avvio: `export ANTHROPIC_API_KEY=sk-ant-...`.
 | `GRAZIELLA_MODEL_DOC` | no | modello per la generazione dei documenti, se vuoi differenziarlo dalla conversazione |
 | `GRAZIELLA_DATA_DIR` | no | dove salvare archivio e conversazioni, default `./data` |
 | `ELEVENLABS_API_KEY` | no | attiva voce naturale in italiano e dettatura registrata (vedi sotto) |
-| `ELEVENLABS_VOICE_ID` | no | voce predefinita di Graziella; default `DVR8HkJ1RuPcPSuAW7Q9`. Compare comunque nel menu "Voce" anche se non è nella libreria dell'account |
+| `ELEVENLABS_VOICE_ID` | no | voce fissa di Graziella; default `DVR8HkJ1RuPcPSuAW7Q9`. È la sola voce ElevenLabs proposta nel menu "Voce" (non serve che sia nella libreria dell'account) — per cambiarla si cambia questa variabile, non dal menu |
 
 ## Voce: due modalità, una sola a costo zero
 

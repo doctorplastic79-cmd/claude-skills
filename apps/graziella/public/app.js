@@ -856,7 +856,7 @@ function vociBrowserPreferita() {
 function costruisciVoci() {
   el.voce.innerHTML = '';
   const gruppoEleven = document.createElement('optgroup');
-  gruppoEleven.label = 'Voce naturale (ElevenLabs)';
+  gruppoEleven.label = 'Voce di Graziella (fissa)';
   for (const v of S.vociEleven) {
     const o = document.createElement('option');
     o.value = `eleven:${v.id}`;
@@ -866,7 +866,7 @@ function costruisciVoci() {
   if (S.vociEleven.length) el.voce.append(gruppoEleven);
 
   const gruppoBrowser = document.createElement('optgroup');
-  gruppoBrowser.label = 'Voce del browser';
+  gruppoBrowser.label = 'Voce del browser (di riserva)';
   const italiane = S.vociBrowser.filter((v) => v.lang?.toLowerCase().startsWith('it'));
   for (const v of italiane.length ? italiane : S.vociBrowser) {
     const o = document.createElement('option');
