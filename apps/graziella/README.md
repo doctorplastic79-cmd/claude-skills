@@ -15,11 +15,17 @@ browser di chi usa l'app.
 
 ```bash
 cd apps/graziella
-export ANTHROPIC_API_KEY=sk-ant-...
+cp .env.example .env
+nano .env        # incolla la tua ANTHROPIC_API_KEY, salva (Ctrl+O, Ctrl+X)
 npm start
 ```
 
-Apri `http://localhost:8787`. Serve Node 18.17 o più recente (`node --version`).
+Apri `http://localhost:8787`. Serve Node 18.17 o più recente (`node --version`);
+su Mac senza Node: `brew install node`, oppure il pacchetto da nodejs.org.
+
+Il file `.env` resta solo sul tuo computer: è in `.gitignore`, non finisce mai
+su git. In alternativa, senza `.env`, puoi esportare la chiave nella shell
+prima di ogni avvio: `export ANTHROPIC_API_KEY=sk-ant-...`.
 
 ## Configurazione (variabili d'ambiente)
 

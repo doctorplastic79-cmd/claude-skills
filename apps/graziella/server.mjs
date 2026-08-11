@@ -9,12 +9,41 @@
  */
 import { createServer } from 'node:http';
 import { readFile, writeFile, mkdir, readdir } from 'node:fs/promises';
+import { readFileSync } from 'node:fs';
 import { join, dirname, extname, resolve, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const ROOT = dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = join(ROOT, 'public');
 const PERSONA_DIR = join(ROOT, 'persona');
+
+// Se esiste un file .env accanto a questo script, le sue chiavi riempiono
+// process.env (senza sovrascrivere variabili già impostate dalla shell).
+// Comodo per un solo Mac in beta test: niente da esportare a ogni terminale,
+// e il file resta locale (è in .gitignore, non finisce mai su git).
+loadDotEnv(join(ROOT, '.env'));
+
+function loadDotEnv(path) {
+  let raw;
+  try {
+    raw = readFileSync(path, 'utf8');
+  } catch {
+    return; // nessun .env: si usano solo le variabili d'ambiente reali
+  }
+  for (const riga of raw.split('\n')) {
+    const t = riga.trim();
+    if (!t || t.startsWith('#')) continue;
+    const eq = t.indexOf('=');
+    if (eq === -1) continue;
+    const chiave = t.slice(0, eq).trim();
+    let valore = t.slice(eq + 1).trim();
+    if ((valore.startsWith('"') && valore.endsWith('"')) || (valore.startsWith("'") && valore.endsWith("'"))) {
+      valore = valore.slice(1, -1);
+    }
+    if (!(chiave in process.env)) process.env[chiave] = valore;
+  }
+}
+
 const DATA_DIR = resolve(process.env.GRAZIELLA_DATA_DIR || join(ROOT, 'data'));
 const OUTPUT_DIR = join(DATA_DIR, 'output');
 const SESSIONS_DIR = join(DATA_DIR, 'sessions');
