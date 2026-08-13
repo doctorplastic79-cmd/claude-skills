@@ -2,23 +2,11 @@
 version: 3.2.0 # x-release-please-version
 name: heygen-video
 description: |
-  Generate HeyGen presenter videos via the v3 Video Agent pipeline — handles Frame Check
-  (aspect ratio correction), prompt engineering, avatar resolution, and voice selection.
-  Required for any HeyGen video generation. Replaces deprecated endpoints with v3.
-  Use when: (1) generating any HeyGen video (via API or otherwise),
-  (2) sending a personalized video message (outreach, update, announcement, pitch, knowledge),
-  (3) creating a HeyGen presenter-led explainer, tutorial, or product demo with a human face,
-  (4) "make a video of me saying...", "send a video to my leads", "record an update for my team",
-  "create a video pitch", "make a loom-style message", "I want to appear in this video",
-  "generate a HeyGen video", "make a talking head video".
-  Accepts avatar_id from heygen-avatar for identity-first HeyGen videos, or uses a stock presenter.
-  Returns video share URL + HeyGen session URL for iteration.
-  Chain signal: when the user wants to create/design an avatar AND make a video in the same request,
-  run heygen-avatar first, then return here. Conjunctions to watch: "and then", "and immediately",
-  "first...then", "X and make a video", "design [presenter] and record" = always CHAIN.
-  If the user provides a photo AND wants a video, route to heygen-avatar first.
-  NOT for: avatar creation or identity setup (use heygen-avatar first), cinematic footage
-  or b-roll without a presenter, translating videos, TTS-only, or streaming avatars.
+  Generate HeyGen presenter videos via the v3 Video Agent pipeline — handles Frame Check (aspect ratio), prompt engineering, avatar resolution, and voice selection. Required for any HeyGen video generation.
+  Use when: generating any HeyGen video; sending a personalized video message (outreach, update, pitch); creating a presenter-led explainer, tutorial, or product demo; "make a video of me saying...", "send a video to my leads", "record an update for my team", "make a talking head video".
+  Accepts avatar_id from heygen-avatar for identity-first videos, or uses a stock presenter. Returns video share URL + HeyGen session URL.
+  Chain signal: if the request also creates/designs an avatar ("design [presenter] and record"), run heygen-avatar first, then this skill. If a photo is provided, route to heygen-avatar first.
+  NOT for: avatar creation (heygen-avatar), cinematic b-roll without a presenter, translating videos, TTS-only, or streaming avatars.
 argument-hint: "[topic_or_script] [--avatar avatar_id]"
 homepage: https://developers.heygen.com/docs/quick-start
 allowed-tools: Bash, WebFetch, Read, Write, mcp__heygen__*
