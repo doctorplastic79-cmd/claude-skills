@@ -11,21 +11,38 @@ Nessuna dipendenza da installare: un solo processo Node che serve l'interfaccia
 e fa da proxy verso l'API Claude, così la chiave resta sul server e non nel
 browser di chi usa l'app.
 
-## Avvio rapido
+## Avvio rapido (Mac, un doppio clic)
+
+Doppio clic su **`Avvia Graziella.command`**, nella cartella `apps/graziella`.
+
+- **Primo avvio**: apre una finestra di Terminale e fa due domande (le chiavi
+  API); risposto a quelle, si avvia da sola e apre il browser.
+- **Avvii successivi**: parte subito, apre `http://localhost:8787` da solo.
+- **Se è già accesa** (un'altra finestra la sta già facendo girare): non ne
+  apre una seconda copia, apre solo il browser sulla pagina già attiva.
+
+La prima volta macOS potrebbe avvisare che il file viene da uno sviluppatore
+non identificato: tasto destro sul file → **Apri** → **Apri** di nuovo nella
+finestra di conferma (basta una volta sola).
+
+Per chiudere Graziella: chiudi la finestra di Terminale che si è aperta, o
+`Ctrl+C` al suo interno.
+
+## Avvio da riga di comando (qualsiasi sistema)
 
 ```bash
 cd apps/graziella
-cp .env.example .env
-nano .env        # incolla la tua ANTHROPIC_API_KEY, salva (Ctrl+O, Ctrl+X)
+bash setup.sh    # solo la prima volta: chiede le chiavi API e le salva in .env
 npm start
 ```
 
 Apri `http://localhost:8787`. Serve Node 18.17 o più recente (`node --version`);
 su Mac senza Node: `brew install node`, oppure il pacchetto da nodejs.org.
 
-Il file `.env` resta solo sul tuo computer: è in `.gitignore`, non finisce mai
-su git. In alternativa, senza `.env`, puoi esportare la chiave nella shell
-prima di ogni avvio: `export ANTHROPIC_API_KEY=sk-ant-...`.
+Il file `.env` che `setup.sh` scrive resta solo sul tuo computer: è in
+`.gitignore`, non finisce mai su git. In alternativa puoi crearlo a mano da
+`.env.example`, o esportare la chiave nella shell prima di ogni avvio:
+`export ANTHROPIC_API_KEY=sk-ant-...`.
 
 ## Configurazione (variabili d'ambiente)
 
