@@ -8,6 +8,9 @@ riutilizzabili e non appesantiscono il codice delle applicazioni.
 | Skill | A cosa serve |
 |---|---|
 | `skills/video-shotcraft` | video promo di prodotto con Remotion: 104 shot recipe cards, gallery di anteprime, template completo, 5 BGM e 149 SFX |
+| `skills/heygen-avatar` | crea un avatar HeyGen persistente (volto + voce) per l'agente, l'utente o un personaggio |
+| `skills/heygen-video` | genera video HeyGen con presenter, dall'idea allo script al video finito |
+| `skills/heygen-translate` | traduce e doppia un video esistente in un'altra lingua, con voice cloning e lip-sync |
 
 | Preset | A cosa serve |
 |---|---|
@@ -116,6 +119,21 @@ Una skill è una cartella con dentro un `SKILL.md` che apre con un frontmatter
 Metti la cartella sotto `skills/`, aggiungi una riga alla tabella in cima e una
 voce in `.claude-plugin/marketplace.json`.
 
+## Skill HeyGen
+
+`heygen-avatar`, `heygen-video` e `heygen-translate` vengono dal repository
+pubblico [heygen-com/skills](https://github.com/heygen-com/skills) (v3.2.0) e
+sono indipendenti tra loro: `heygen-avatar` crea l'identità (volto + voce) che
+`heygen-video` riusa; `heygen-translate` lavora su un video già esistente e
+non dipende dalle altre due.
+
+Per funzionare serve una `HEYGEN_API_KEY` (da
+[app.heygen.com/api](https://app.heygen.com/api)), oppure il server MCP di
+HeyGen se già collegato all'agente — impostare la chiave disattiva la ricerca
+automatica dell'MCP. La chiave va messa nell'ambiente di chi usa la skill
+(shell profile o `.env` locale), mai in questo repository. Dettagli completi
+nei singoli `SKILL.md` e nel repository originale.
+
 ## Licenze
 
 Ogni skill mantiene la licenza originale, nel file `LICENSE` della sua cartella.
@@ -123,3 +141,5 @@ Ogni skill mantiene la licenza originale, nel file `LICENSE` della sua cartella.
 - `video-shotcraft` — Apache-2.0, di [Vincentwei1021](https://github.com/Vincentwei1021/video-shotcraft).
   Gli asset audio hanno licenze proprie, elencate in
   `skills/video-shotcraft/assets/audio/ATTRIBUTION.md`.
+- `heygen-avatar`, `heygen-video`, `heygen-translate` — MIT, di
+  [HeyGen](https://github.com/heygen-com/skills).
