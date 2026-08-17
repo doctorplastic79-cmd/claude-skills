@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Karaoke Studio</title>
+<meta name="theme-color" content="#0f1117">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icon-180.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Karaoke">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<main>
+  <header>
+    <h1>🎤 Karaoke Studio</h1>
+    <p class="sub">Versione autonoma: tutto avviene sul tuo iPhone/iPad,
+    nessun computer necessario. Scegli un brano, canti sulla base e la tua
+    voce riceve gli effetti dell'originale.</p>
+  </header>
+
+  <!-- Passo 1: brano -->
+  <section id="step-file" class="card">
+    <h2><span class="n">1</span> Scegli la canzone</h2>
+    <p class="hint">Apri un file audio (MP3, M4A, WAV…) da File, iCloud o
+    dal telefono. <b>Da qui non posso scaricare da YouTube</b>: per quello
+    serve la versione con il computer, oppure salva prima il brano come file.</p>
+    <div class="row">
+      <label class="button primary" for="file-input">📂 Apri un brano</label>
+      <input id="file-input" type="file" accept="audio/*,video/mp4,.mp3,.m4a,.wav,.aac,.flac" class="hidden">
+      <span id="file-name" class="hint"></span>
+    </div>
+    <p id="prepare-status" class="status hidden"></p>
+  </section>
+
+  <!-- Passo 2: ascolta -->
+  <section id="step-listen" class="card hidden">
+    <h2><span class="n">2</span> Ascolta <span id="song-title" class="title"></span></h2>
+    <div class="players">
+      <label>Brano originale <audio id="audio-original" controls preload="none"></audio></label>
+      <label>Base musicale (voce attenuata) <audio id="audio-base" controls preload="auto"></audio></label>
+    </div>
+    <p class="hint">ℹ️ Qui la separazione avviene sul telefono con la tecnica
+    mid/side: la voce al centro viene attenuata, non rimossa del tutto come
+    fa l'AI della versione con computer. Con le cuffie funziona comunque bene
+    da guida per cantare.</p>
+    <p id="profile-info" class="hint"></p>
+  </section>
+
+  <!-- Passo 3: tonalità -->
+  <section id="step-key" class="card hidden">
+    <h2><span class="n">3</span> Trova la tua tonalità</h2>
+    <p class="hint">Canta una nota <b>bassa</b> comoda e poi una <b>alta</b>
+    comoda (una vocale, tipo "aaah", per 4 secondi): misuro la tua estensione
+    e ti propongo la tonalità giusta per questo brano.</p>
+    <div class="row">
+      <button id="btn-range-test" class="primary">🎼 Prova la mia estensione</button>
+      <span id="range-phase" class="hint"></span>
+    </div>
+    <p id="range-result" class="hint hidden"></p>
+    <div class="row">
+      <label class="opt">Tonalità della base:
+        <button id="key-minus" class="mini">−</button>
+        <b id="key-value">0</b> semitoni
+        <button id="key-plus" class="mini">+</button>
+      </label>
+      <button id="btn-apply-key">Applica tonalità</button>
+    </div>
+    <div class="meter hidden" id="key-progress-wrap"><div id="key-progress"></div></div>
+    <p id="key-status" class="status hidden"></p>
+  </section>
+
+  <!-- Passo 4: microfono e registrazione -->
+  <section id="step-record" class="card hidden">
+    <h2><span class="n">4</span> Microfono e registrazione</h2>
+    <div class="row">
+      <label class="opt">Microfono:
+        <select id="mic-select"><option value="">predefinito</option></select></label>
+      <button id="btn-mic-refresh" class="mini" title="Aggiorna elenco">↻</button>
+      <button id="btn-mic-test">Prova microfono</button>
+    </div>
+    <div class="meter"><div id="level-bar"></div></div>
+    <p id="mic-verdict" class="hint"></p>
+    <p class="hint">💡 Va benissimo il microfono dell'iPhone; lo <b>Zoom V3</b>
+    si collega alla presa USB-C (iPhone 15 o successivi, iPad recenti) e
+    compare nell'elenco. Sul V3 disattiva gli effetti incorporati: quelli
+    giusti li applico io. Usa le cuffie (anche AirPods) per la base.</p>
+    <hr>
+    <div class="row">
+      <button id="btn-record" class="primary">● Registra</button>
+      <button id="btn-stop" class="danger hidden">■ Ferma</button>
+      <span id="rec-timer" class="timer hidden">0:00</span>
+    </div>
+    <div id="countdown" class="countdown hidden"></div>
+    <details class="opts">
+      <summary>Opzioni</summary>
+      <label class="opt"><input id="auto-align" type="checkbox" checked>
+        Allinea automaticamente il mio canto alla base</label>
+      <label class="opt">Correzione manuale del ritardo (ms):
+        <input id="manual-offset" type="number" value="0" step="10" min="-2000" max="2000"></label>
+    </details>
+    <p id="record-status" class="status hidden"></p>
+  </section>
+
+  <!-- Passo 5: risultato -->
+  <section id="step-result" class="card hidden">
+    <h2><span class="n">5</span> Il tuo karaoke</h2>
+    <div class="players">
+      <label>Mix finale (la tua voce con gli effetti dell'originale + base)
+        <audio id="audio-mix" controls preload="auto"></audio></label>
+      <label>Solo la tua voce con gli effetti
+        <audio id="audio-myvoice" controls preload="none"></audio></label>
+    </div>
+    <div class="row">
+      <label class="opt">Volume della tua voce nel mix:
+        <input id="vocal-gain" type="range" min="-12" max="12" value="0" step="1">
+        <span id="vocal-gain-val">0 dB</span></label>
+      <button id="btn-remix">Rimixa</button>
+    </div>
+    <div class="row">
+      <a id="dl-mix" class="button" download="karaoke-mix.wav">⬇ Scarica il mix</a>
+      <button id="btn-share" class="button">📤 Condividi / Salva su File</button>
+    </div>
+    <p id="offset-info" class="hint"></p>
+  </section>
+
+  <footer>
+    <p>Funziona anche offline dopo la prima apertura.
+    Solo per uso personale: rispetta i diritti d'autore dei brani.</p>
+  </footer>
+</main>
+<script src="dsp.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
