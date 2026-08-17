@@ -144,10 +144,3 @@ Ogni skill mantiene la licenza originale, nel file `LICENSE` della sua cartella.
 - `heygen-avatar`, `heygen-video`, `heygen-translate` — MIT, di
   [HeyGen](https://github.com/heygen-com/skills).
 
----
-
-## App pubblicate da questo repository
-
-| Cartella | Cosa fa |
-|---|---|
-| `karaoke-studio/` | 🎤 **Karaoke Studio** (versione autonoma per iPhone/iPad): scegli un brano, la base viene separata sul telefono, canti sopra e la tua voce riceve gli effetti dell'originale. Pubblicata su [doctorplastic79-cmd.github.io/claude-skills](https://doctorplastic79-cmd.github.io/claude-skills/). Il codice sorgente completo (con la versione da computer, YouTube + AI Demucs) vive nel repo `tv-italia`, cartella `karaoke-studio/`. |
