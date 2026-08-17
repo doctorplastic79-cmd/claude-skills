@@ -1,0 +1,35 @@
+# Pubblica Karaoke Studio (versione autonoma per iPhone/iPad) su GitHub Pages.
+# L'app sarà su: https://doctorplastic79-cmd.github.io/claude-skills/
+name: Pubblica Karaoke Studio
+
+on:
+  push:
+    branches: [main]
+    paths: ["karaoke-studio/**"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/configure-pages@v5
+        with:
+          enablement: true   # attiva GitHub Pages da solo, se non lo è già
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: karaoke-studio
+      - id: deployment
+        uses: actions/deploy-pages@v4
