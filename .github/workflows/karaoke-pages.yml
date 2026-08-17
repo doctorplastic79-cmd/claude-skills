@@ -1,5 +1,6 @@
-# Pubblica Karaoke Studio (versione autonoma per iPhone/iPad) su GitHub Pages.
-# L'app sarà su: https://doctorplastic79-cmd.github.io/claude-skills/
+# Aggiorna l'app pubblicata quando karaoke-studio/ cambia su main.
+# L'app è servita da GitHub Pages dal branch gh-pages:
+#   https://doctorplastic79-cmd.github.io/claude-skills/
 name: Pubblica Karaoke Studio
 
 on:
@@ -9,27 +10,22 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
-  pages: write
-  id-token: write
-
-concurrency:
-  group: pages
-  cancel-in-progress: true
+  contents: write
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/configure-pages@v5
-        with:
-          enablement: true   # attiva GitHub Pages da solo, se non lo è già
-      - uses: actions/upload-pages-artifact@v3
-        with:
-          path: karaoke-studio
-      - id: deployment
-        uses: actions/deploy-pages@v4
+      - name: Copia l'app sul branch gh-pages
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git fetch origin gh-pages
+          git worktree add /tmp/site gh-pages
+          rsync -a --delete --exclude .git karaoke-studio/ /tmp/site/
+          touch /tmp/site/.nojekyll
+          cd /tmp/site
+          git add -A
+          git diff --cached --quiet || git commit -m "Aggiorna Karaoke Studio da main"
+          git push origin HEAD:gh-pages
