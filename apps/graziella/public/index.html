@@ -1,0 +1,169 @@
+<!doctype html>
+<html lang="it">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="color-scheme" content="light dark" />
+    <title>Graziella — Direzione Generale InFormaMedica</title>
+    <link rel="stylesheet" href="/styles.css" />
+    <link
+      rel="icon"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ccircle cx='50' cy='50' r='46' fill='%230d5c63'/%3E%3Ctext x='50' y='68' font-family='Georgia,serif' font-size='58' fill='%23fff' text-anchor='middle'%3EG%3C/text%3E%3C/svg%3E"
+    />
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="brand">
+        <span class="brand-mark" aria-hidden="true">G</span>
+        <span class="brand-text">
+          <strong>Graziella</strong>
+          <small>Direzione Generale · InFormaMedica</small>
+        </span>
+      </div>
+
+      <div class="topbar-controls">
+        <label class="field">
+          <span>Sto parlando io</span>
+          <select id="operatore"></select>
+        </label>
+        <label class="field">
+          <span>Voce</span>
+          <select id="voce"></select>
+        </label>
+        <button id="btn-impostazioni" class="ghost" type="button" title="Impostazioni">Impostazioni</button>
+      </div>
+    </header>
+
+    <main>
+      <section class="colonna-chat" aria-label="Conversazione">
+        <div id="stato-banner" class="banner" hidden></div>
+
+        <div id="trascrizione" class="trascrizione" aria-live="polite">
+          <div class="benvenuto">
+            <h1>Parla, ti ascolto.</h1>
+            <p>
+              Premi il microfono e racconta il problema come lo racconteresti a voce a una persona di
+              direzione: una riunione da verbalizzare, un fornitore da richiamare, un messaggio da
+              scrivere a un paziente, una decisione da istruire per il Dottore.
+            </p>
+            <p class="benvenuto-nota">
+              Quando il discorso è pronto, dalla colonna “Finalità” lo trasformi in un documento:
+              memo, verbale con le azioni, procedura, messaggio, brief social.
+            </p>
+            <p class="benvenuto-nota">
+              Con “Conversazione continua” e la modalità di ascolto “Automatica” puoi anche
+              interromperla parlandole sopra, come al telefono. Con le cuffie funziona meglio: senza,
+              il microfono può scambiare la sua voce dagli altoparlanti per la tua.
+            </p>
+          </div>
+        </div>
+
+        <div class="riga-interim"><span id="interim"></span></div>
+
+        <div class="console">
+          <button id="btn-mic" class="mic" type="button" aria-label="Attiva il microfono">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path
+                d="M12 15a3.5 3.5 0 0 0 3.5-3.5V6a3.5 3.5 0 1 0-7 0v5.5A3.5 3.5 0 0 0 12 15Z"
+              />
+              <path d="M19 11.5a7 7 0 0 1-14 0" fill="none" stroke-width="2" />
+              <path d="M12 18.5V22" fill="none" stroke-width="2" />
+            </svg>
+            <span class="mic-onda" aria-hidden="true"></span>
+          </button>
+
+          <div class="console-centro">
+            <div id="stato-voce" class="stato-voce">Microfono spento</div>
+            <div class="console-azioni">
+              <label class="switch">
+                <input type="checkbox" id="mani-libere" checked />
+                <span>Conversazione continua</span>
+              </label>
+              <button id="btn-stop-voce" class="ghost small" type="button">Zitta un attimo</button>
+              <button id="btn-nuova" class="ghost small" type="button">Nuova conversazione</button>
+            </div>
+          </div>
+
+          <form id="form-testo" class="form-testo">
+            <input id="input-testo" type="text" placeholder="…oppure scrivi qui" autocomplete="off" />
+            <button type="submit" class="primario">Invia</button>
+          </form>
+        </div>
+      </section>
+
+      <aside class="colonna-lato">
+        <div class="pannello">
+          <h2>Finalità</h2>
+          <p class="pannello-nota">
+            Chiude la conversazione in un documento pronto da usare. Serve almeno uno scambio.
+          </p>
+          <div id="finalita" class="finalita"></div>
+        </div>
+
+        <div class="pannello">
+          <div class="pannello-testa">
+            <h2>Archivio</h2>
+            <button id="btn-aggiorna-archivio" class="ghost small" type="button">Aggiorna</button>
+          </div>
+          <ul id="archivio" class="lista"></ul>
+        </div>
+
+        <div class="pannello">
+          <div class="pannello-testa">
+            <h2>Conversazioni</h2>
+            <button id="btn-aggiorna-sessioni" class="ghost small" type="button">Aggiorna</button>
+          </div>
+          <ul id="sessioni" class="lista"></ul>
+        </div>
+      </aside>
+    </main>
+
+    <!-- documento prodotto -->
+    <dialog id="dlg-doc" class="dialogo">
+      <header>
+        <h2 id="doc-titolo">Documento</h2>
+        <button data-chiudi class="ghost small" type="button">Chiudi</button>
+      </header>
+      <div id="doc-corpo" class="doc-corpo"></div>
+      <footer>
+        <span id="doc-stato" class="doc-stato"></span>
+        <div class="spazio"></div>
+        <button id="btn-copia" class="ghost" type="button">Copia</button>
+        <button id="btn-scarica" class="ghost" type="button">Scarica .md</button>
+        <button id="btn-archivia" class="primario" type="button">Salva in archivio</button>
+      </footer>
+    </dialog>
+
+    <!-- impostazioni -->
+    <dialog id="dlg-imp" class="dialogo">
+      <header>
+        <h2>Impostazioni</h2>
+        <button data-chiudi class="ghost small" type="button">Chiudi</button>
+      </header>
+      <div class="imp-corpo">
+        <label class="field larga">
+          <span>Codice di accesso</span>
+          <input id="imp-codice" type="password" placeholder="solo se il server lo richiede" />
+        </label>
+        <label class="field larga">
+          <span>Modalità di ascolto</span>
+          <select id="imp-modo-stt">
+            <option value="auto">Automatica (riconoscimento del browser)</option>
+            <option value="registra">Registra e trascrivi (ElevenLabs)</option>
+          </select>
+        </label>
+        <label class="field larga">
+          <span>Velocità della voce</span>
+          <input id="imp-velocita" type="range" min="0.7" max="1.4" step="0.05" value="1" />
+        </label>
+        <label class="switch larga">
+          <input type="checkbox" id="imp-leggi" checked />
+          <span>Graziella risponde a voce</span>
+        </label>
+        <p id="imp-diagnostica" class="imp-diagnostica"></p>
+      </div>
+    </dialog>
+
+    <script src="/app.js" type="module"></script>
+  </body>
+</html>

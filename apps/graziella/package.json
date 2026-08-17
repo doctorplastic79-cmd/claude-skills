@@ -1,0 +1,12 @@
+{
+  "name": "graziella",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Direzione Generale vocale di InFormaMedica: parla con Graziella, ottieni memo, verbali, procedure e messaggi pronti.",
+  "type": "module",
+  "engines": { "node": ">=18.17" },
+  "scripts": {
+    "start": "node server.mjs",
+    "dev": "node --watch server.mjs"
+  }
+}

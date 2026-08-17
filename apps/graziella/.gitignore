@@ -1,0 +1,9 @@
+# conversazioni e documenti generati: dati reali della clinica, non versionati
+data/output/*.md
+data/sessions/*.json
+!data/output/.gitkeep
+!data/sessions/.gitkeep
+
+node_modules/
+*.log
+.env

@@ -1,0 +1,66 @@
+{
+  "operatori": [
+    { "id": "dario", "nome": "Dario", "ruolo": "Direttore sanitario e volto del brand" },
+    { "id": "graziella", "nome": "Graziella", "ruolo": "Direzione generale" },
+    { "id": "direzione", "nome": "Staff di direzione", "ruolo": "Organizzazione, agenda, fornitori" },
+    { "id": "reception", "nome": "Reception", "ruolo": "Accoglienza, telefono, WhatsApp" }
+  ],
+  "finalita": [
+    {
+      "id": "memo",
+      "titolo": "Memo per Dario",
+      "icona": "M",
+      "descrizione": "Una pagina con la decisione da prendere, le opzioni e la raccomandazione.",
+      "istruzioni": "Scrivi un memo decisionale per il Dott. Palazzolo. Struttura: titolo; 'In una riga' (la decisione richiesta); 'Situazione' (max 5 righe di fatti); 'Opzioni' (2-3 opzioni con costo/impatto/tempi, anche stimati e marcati come stima); 'Raccomandazione' con la motivazione in due righe; 'Cosa serve da te' (l'azione che spetta a Dario). Niente riempitivi. Ogni dato non confermato va scritto come [da confermare]."
+    },
+    {
+      "id": "verbale",
+      "titolo": "Verbale con azioni",
+      "icona": "V",
+      "descrizione": "Sintesi della riunione o della telefonata, decisioni prese e chi fa cosa entro quando.",
+      "istruzioni": "Scrivi il verbale di quanto emerso. Struttura: titolo con data; 'Presenti' (solo chi risulta dalla conversazione); 'Punti discussi' in elenco breve; 'Decisioni' numerate e non ambigue; tabella 'Azioni' con colonne Azione | Responsabile | Entro; 'Aperti' (le cose rimaste senza risposta). Se responsabile o scadenza non sono stati detti, scrivi [da assegnare] o [da fissare]: non inventarli."
+    },
+    {
+      "id": "procedura",
+      "titolo": "Procedura per lo staff",
+      "icona": "P",
+      "descrizione": "Istruzione operativa passo per passo, da stampare o appendere.",
+      "istruzioni": "Scrivi una procedura interna operativa. Struttura: titolo; 'A chi serve' e 'Quando si applica'; passi numerati in imperativo, uno per azione, verificabili; 'Casi particolari'; 'Cosa non fare'; 'Chi contattare se qualcosa non torna'. Linguaggio semplice, leggibile da chi la vede per la prima volta. Se un passo dipende da un dato che non hai, marcalo [da confermare]."
+    },
+    {
+      "id": "messaggio",
+      "titolo": "Messaggio a paziente o fornitore",
+      "icona": "@",
+      "descrizione": "Email o WhatsApp pronto da inviare, nel tono del brand.",
+      "istruzioni": "Scrivi il messaggio pronto all'invio. Produci due varianti etichettate: 'WhatsApp' (breve, caldo, massimo 6 righe, nessun dato clinico) e 'Email' (con oggetto). Se il destinatario è un paziente, applica la conformità sanitaria: informativo, nessuna promessa di risultato, nessuna pressione, il consiglio clinico resta al medico. Chiudi con la CTA di contatto solo se ha senso. Non inserire dati identificativi del paziente: usa [Nome]."
+    },
+    {
+      "id": "brief-social",
+      "titolo": "Brief social",
+      "icona": "S",
+      "descrizione": "Brief pronto da passare allo skill social-informamedica per i post.",
+      "istruzioni": "Scrivi un brief di contenuto per il social media manager della clinica. Struttura: titolo; 'Tema'; 'Obiettivo' (informare / prenotazioni / brand); 'Messaggio chiave' in una frase; 'Punti da toccare' (3-5); 'Cosa evitare' (compresi i limiti di conformità sanitaria pertinenti al tema); 'Media disponibili' (solo se citati nella conversazione, altrimenti [da fornire]); 'Piattaforme suggerite' con una riga di motivo ciascuna; 'CTA'. Non scrivere le caption finali: quelle le produce lo skill social."
+    },
+    {
+      "id": "materiale-paziente",
+      "titolo": "Foglio informativo paziente",
+      "icona": "I",
+      "descrizione": "Scheda informativa da dare in sala d'attesa o in consulenza.",
+      "istruzioni": "Scrivi un foglio informativo per i pazienti. Struttura: titolo chiaro; 'In poche parole'; 'Come funziona' (linguaggio semplice, frasi corte); 'Per chi è indicato / quando serve una valutazione'; 'Cosa aspettarsi dalla seduta'; 'Domande frequenti' (3-4); 'Come prenotare'. Obbligatorio: nessuna promessa di risultato, formula esplicita che i risultati variano da persona a persona e che è necessaria una valutazione medica preliminare. Ogni affermazione clinica che non è confermata nella conversazione va marcata [da validare dal Dott. Palazzolo]."
+    },
+    {
+      "id": "piano",
+      "titolo": "Piano operativo",
+      "icona": "T",
+      "descrizione": "Checklist di attività con responsabili, scadenze e ordine di priorità.",
+      "istruzioni": "Scrivi un piano operativo. Struttura: titolo e obiettivo in una riga; tabella 'Attività' con colonne Attività | Responsabile | Entro | Priorità (alta/media/bassa); 'Sequenza consigliata' in 3-6 passi; 'Rischi e come coprirli' (max 3). Solo attività che risultano dalla conversazione o che sono conseguenza diretta di quanto deciso; le aggiunte tue vanno segnate con (proposta)."
+    },
+    {
+      "id": "report",
+      "titolo": "Report di sintesi",
+      "icona": "R",
+      "descrizione": "Sintesi ordinata della conversazione, per archivio o per girarla a terzi.",
+      "istruzioni": "Scrivi una sintesi ordinata e leggibile della conversazione: titolo con data, 'Di cosa si è parlato', i contenuti per argomento con i dettagli concreti (numeri, nomi, date solo se detti), 'Conclusioni', 'Da fare'. Fedele: non aggiungere interpretazioni non emerse."
+    }
+  ]
+}
