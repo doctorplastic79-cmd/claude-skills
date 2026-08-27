@@ -23,6 +23,11 @@
       "name": "heygen-translate",
       "source": "./skills/heygen-translate",
       "description": "Traduce e doppia un video in un'altra lingua con voice cloning e lip-sync, via HeyGen Video Translation."
+    },
+    {
+      "name": "kits",
+      "source": "./skills/kits",
+      "description": "Conversione voce-a-voce con l'API di Kits.ai: elenca i modelli vocali dell'account e converte file audio WAV/MP3 con un modello scelto."
     }
   ]
 }

@@ -11,6 +11,7 @@ riutilizzabili e non appesantiscono il codice delle applicazioni.
 | `skills/heygen-avatar` | crea un avatar HeyGen persistente (volto + voce) per l'agente, l'utente o un personaggio |
 | `skills/heygen-video` | genera video HeyGen con presenter, dall'idea allo script al video finito |
 | `skills/heygen-translate` | traduce e doppia un video esistente in un'altra lingua, con voice cloning e lip-sync |
+| `skills/kits` | conversione voce-a-voce con l'API di Kits.ai: elenca i modelli vocali e converte file WAV/MP3 con il modello scelto |
 
 | Preset | A cosa serve |
 |---|---|
@@ -133,6 +134,15 @@ HeyGen se già collegato all'agente — impostare la chiave disattiva la ricerca
 automatica dell'MCP. La chiave va messa nell'ambiente di chi usa la skill
 (shell profile o `.env` locale), mai in questo repository. Dettagli completi
 nei singoli `SKILL.md` e nel repository originale.
+
+## Skill Kits.ai
+
+`kits` è autonoma: il client Python completo è in `skills/kits/scripts/`, serve
+solo `requests`. Per funzionare serve una `KITS_API_KEY` (da
+[app.kits.ai](https://app.kits.ai), sezione API), da mettere nell'ambiente di
+chi usa la skill (variabili dell'environment cloud o `.env` locale), mai in
+questo repository. Copre solo la conversione voce-a-voce: l'API TTS di Kits è
+stata dismessa il 22/09/2025.
 
 ## Licenze
 
