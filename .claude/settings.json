@@ -9,5 +9,20 @@
   },
   "enabledPlugins": {
     "codex@openai-codex": true
+  },
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "command -v codex >/dev/null 2>&1 || npm install -g @openai/codex >/dev/null 2>&1",
+            "timeout": 300,
+            "async": true,
+            "statusMessage": "Installing Codex CLI..."
+          }
+        ]
+      }
+    ]
   }
 }
