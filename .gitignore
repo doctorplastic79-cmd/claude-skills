@@ -1,2 +1,5 @@
 # artefatto di build, si rigenera con ./package-for-claude-ai.sh
 *.zip
+
+# dipendenze del connettore MCP, si rigenerano con npm install
+node_modules/

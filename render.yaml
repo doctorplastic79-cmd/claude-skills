@@ -1,0 +1,17 @@
+# Blueprint Render per il connettore MCP di MEGA (cartella mega-mcp/).
+# Deploy: su render.com → New → Blueprint → collegare questo repository.
+services:
+  - type: web
+    name: mega-mcp
+    runtime: node
+    rootDir: mega-mcp
+    plan: free
+    buildCommand: npm install
+    startCommand: npm start
+    envVars:
+      - key: MEGA_EMAIL
+        sync: false
+      - key: MEGA_PASSWORD
+        sync: false
+      - key: AUTH_TOKEN
+        generateValue: true
