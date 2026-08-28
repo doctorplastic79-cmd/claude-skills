@@ -23,6 +23,11 @@
       "name": "heygen-translate",
       "source": "./skills/heygen-translate",
       "description": "Traduce e doppia un video in un'altra lingua con voice cloning e lip-sync, via HeyGen Video Translation."
+    },
+    {
+      "name": "mega",
+      "source": "./skills/mega",
+      "description": "Installa e usa MEGA (mega.nz): MEGAcmd o megatools, con fallback sul workflow MEGA Bridge di karaoke-cloud quando la rete blocca MEGA."
     }
   ]
 }
