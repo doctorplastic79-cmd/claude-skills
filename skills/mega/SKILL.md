@@ -51,6 +51,17 @@ permettere questi domini, altrimenti vale solo il fallback:
 | `g.api.mega.co.nz` (e `*.api.mega.co.nz`) | API di MEGA (login, listing) |
 | `*.userstorage.mega.co.nz` | trasferimento effettivo dei file |
 
+Il blocco di default NON è fisso: su claude.ai/code, dal selettore environment
+(icona a nuvola sopra la casella del messaggio) si imposta **Network access =
+Custom** e si incollano in *Allowed domains*, una per riga: `mega.nz`,
+`*.mega.nz`, `mega.co.nz`, `*.mega.co.nz`, `mega.io`, spuntando *Also include
+default list of common package managers*. Nello stesso dialog si aggiungono le
+variabili d'ambiente `MEGA_EMAIL`/`MEGA_PASSWORD` (o `MEGA_SESSION`) e, come
+setup script, `bash scripts/install-mega.sh`. La modifica vale per le sessioni
+avviate dopo. La guida completa del sistema a tre corsie (sessione diretta,
+sync NAS via MEGAcmd, bridge GitHub Actions) è in
+`doctorplastic79-cmd/karaoke-cloud`, file `docs/MEGA-GRATIS.md`.
+
 ## Uso diretto (rete permettendo)
 
 ### Con MEGAcmd (preferito)
