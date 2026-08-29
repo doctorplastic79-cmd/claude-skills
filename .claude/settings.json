@@ -16,10 +16,10 @@
         "hooks": [
           {
             "type": "command",
-            "command": "command -v codex >/dev/null 2>&1 || npm install -g @openai/codex >/dev/null 2>&1",
+            "command": "command -v codex >/dev/null 2>&1 || npm install -g @openai/codex >/dev/null 2>&1; if command -v codex >/dev/null 2>&1 && [ -n \"$OPENAI_API_KEY\" ] && ! codex login status >/dev/null 2>&1; then printenv OPENAI_API_KEY | codex login --with-api-key >/dev/null 2>&1; fi",
             "timeout": 300,
             "async": true,
-            "statusMessage": "Installing Codex CLI..."
+            "statusMessage": "Preparing Codex CLI..."
           }
         ]
       }
