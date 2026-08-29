@@ -17,7 +17,9 @@ import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/
 import { Storage } from 'megajs'
 
 const PORT = Number(process.env.PORT || 10000)
-const AUTH_TOKEN = process.env.AUTH_TOKEN
+// Trim: un valore incollato nel pannello dell'hosting porta spesso spazi o un
+// newline finale, che altrimenti farebbero fallire ogni confronto.
+const AUTH_TOKEN = (process.env.AUTH_TOKEN || '').trim()
 
 if (!AUTH_TOKEN) {
   console.error('AUTH_TOKEN mancante: rifiuto di partire senza protezione dell\'endpoint.')
@@ -33,8 +35,8 @@ let storagePromise = null
 function getStorage () {
   if (!storagePromise) {
     storagePromise = (async () => {
-      const email = process.env.MEGA_EMAIL
-      const password = process.env.MEGA_PASSWORD
+      const email = (process.env.MEGA_EMAIL || '').trim()
+      const password = (process.env.MEGA_PASSWORD || '').trim()
       if (!email || !password) {
         throw new Error('MEGA_EMAIL o MEGA_PASSWORD non configurate nelle variabili d\'ambiente del server.')
       }
@@ -192,13 +194,18 @@ app.use(express.json({ limit: '4mb' }))
 app.get('/', (req, res) => res.type('text/plain').send('MEGA MCP attivo. Endpoint: POST /mcp/<AUTH_TOKEN>'))
 
 app.all('/mcp/:token', async (req, res) => {
-  if (req.params.token !== AUTH_TOKEN) {
+  if (decodeURIComponent(req.params.token).trim() !== AUTH_TOKEN) {
     return res.status(401).json({ error: 'token non valido' })
   }
+  // Un GET dal browser è il modo più semplice per verificare l'URL a mano:
+  // rispondere in chiaro che il token è corretto evita di dover indovinare.
   if (req.method !== 'POST') {
     return res.status(405).json({
       jsonrpc: '2.0',
-      error: { code: -32000, message: 'Method not allowed: server stateless, usare POST.' },
+      error: {
+        code: -32000,
+        message: 'Token corretto: questo URL e quello giusto da incollare nel connettore. Endpoint accessibile solo via POST (MCP).'
+      },
       id: null
     })
   }
