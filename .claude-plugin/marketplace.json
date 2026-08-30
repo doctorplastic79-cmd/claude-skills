@@ -23,6 +23,11 @@
       "name": "heygen-translate",
       "source": "./skills/heygen-translate",
       "description": "Traduce e doppia un video in un'altra lingua con voice cloning e lip-sync, via HeyGen Video Translation."
+    },
+    {
+      "name": "synology-nas-access",
+      "source": "./skills/synology-nas-access",
+      "description": "Accesso in sola lettura al NAS Synology tramite gateway SFTP su Tailscale: esplora, cerca, legge e scarica file."
     }
   ]
 }

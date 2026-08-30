@@ -11,6 +11,7 @@ riutilizzabili e non appesantiscono il codice delle applicazioni.
 | `skills/heygen-avatar` | crea un avatar HeyGen persistente (volto + voce) per l'agente, l'utente o un personaggio |
 | `skills/heygen-video` | genera video HeyGen con presenter, dall'idea allo script al video finito |
 | `skills/heygen-translate` | traduce e doppia un video esistente in un'altra lingua, con voice cloning e lip-sync |
+| `skills/synology-nas-access` | accesso in sola lettura al NAS Synology via gateway SFTP su Tailscale: esplora, cerca, legge e scarica file |
 
 | Preset | A cosa serve |
 |---|---|
@@ -134,6 +135,26 @@ automatica dell'MCP. La chiave va messa nell'ambiente di chi usa la skill
 (shell profile o `.env` locale), mai in questo repository. Dettagli completi
 nei singoli `SKILL.md` e nel repository originale.
 
+## Skill NAS Synology
+
+`synology-nas-access` legge il NAS **INFORMA-NAS** (Synology DS220+) attraverso
+un gateway SFTP dedicato in sola lettura, raggiungibile solo via Tailscale su
+`informa-nas.tail077572.ts.net:2222`. Non tocca mai SSH di DSM sulla porta 22,
+non scrive, non rinomina e non cancella nulla.
+
+Il setup è una tantum e si fa **sulla macchina locale**, non in una sessione
+cloud: le sessioni cloud sono effimere e non vedono la rete Tailscale.
+
+1. `python3 ~/.claude/skills/synology-nas-access/scripts/configure.py init`
+2. `configure.py keygen` e `configure.py export-public-key` per la chiave del client
+3. Deploy del gateway sul NAS con `gateway/deploy.sh` (Container Manager)
+4. `configure.py pin-host` per fissare la host key
+5. Verifica con `scripts/nasctl.py doctor`
+
+Chiavi private, `.env` e `config.json` vivono fuori dal repository (in
+`~/.config/claude-nas/`) e non vanno mai committati. Passo per passo in
+`skills/synology-nas-access/references/setup.md`.
+
 ## Licenze
 
 Ogni skill mantiene la licenza originale, nel file `LICENSE` della sua cartella.
@@ -143,4 +164,5 @@ Ogni skill mantiene la licenza originale, nel file `LICENSE` della sua cartella.
   `skills/video-shotcraft/assets/audio/ATTRIBUTION.md`.
 - `heygen-avatar`, `heygen-video`, `heygen-translate` — MIT, di
   [HeyGen](https://github.com/heygen-com/skills).
+- `synology-nas-access` — skill interna, uso personale.
 

@@ -1,0 +1,15 @@
+{
+  "host": "informa-nas.tail077572.ts.net",
+  "port": 2222,
+  "user": "nasreader",
+  "remote_root": "/nas",
+  "identity_file": "~/.ssh/claude_nas_read_ed25519",
+  "known_hosts_file": "~/.config/claude-nas/known_hosts",
+  "connect_timeout_seconds": 10,
+  "command_timeout_seconds": 45,
+  "max_list_entries": 1000,
+  "max_search_depth": 6,
+  "max_search_results": 200,
+  "max_read_bytes": 1048576,
+  "max_download_bytes": 1073741824
+}
