@@ -77,7 +77,7 @@ chmod 600 ~/.config/nas-synology/config.env
 | `NAS_CA_BUNDLE` | file PEM con il certificato del NAS, alternativa pulita a `NAS_VERIFY_TLS=no` |
 | `NAS_READONLY` | `1` blocca ogni scrittura, anche con `--yes` |
 | `NAS_SSH_HOST`, `NAS_SSH_USER`, `NAS_SSH_PORT`, `NAS_SSH_KEY` | trasporto SSH |
-| `NAS_TIMEOUT` | secondi di attesa per richiesta (default 30) |
+| `NAS_TIMEOUT` | secondi di attesa per richiesta (default 30). Alzalo a 90 se il NAS e' sotto carico o lo raggiungi da un relay QuickConnect: la richiesta parte, ma la risposta arriva tardi |
 | `NAS_UPLOAD_LIMIT_MB` | tetto per l'upload via API (default 256) |
 | `NAS_CONFIG`, `NAS_CACHE_DIR` | percorsi alternativi di config e cache |
 

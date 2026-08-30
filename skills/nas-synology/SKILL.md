@@ -159,7 +159,7 @@ risponde come quello vero.
 tests/run-tests.sh
 ```
 
-62 prove: lettura, file, blocchi sulle scritture, re-login su sessione scaduta,
+65 prove: lettura, file, blocchi sulle scritture, re-login su sessione scaduta,
 diagnosi TLS, messaggi d'errore, logica di `nas-setup.sh`, e i codici TOTP
 contro i vettori della RFC 6238. Eseguile
 dopo ogni modifica al client, e aggiungine una quando aggiungi un comando: e'

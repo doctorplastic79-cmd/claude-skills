@@ -255,6 +255,24 @@ class DSM:
                 "e il dominio ammesso dalla network policy dell'ambiente.",
                 fatal=True,
             )
+        except TimeoutError:
+            # Il timeout di lettura scatta dopo che la connessione e' riuscita,
+            # quindi non passa da URLError e senza questo ramo uscirebbe come
+            # traceback. Le due cause vere sono un NAS sotto carico e il relay
+            # QuickConnect, che aggiunge latenza a ogni richiesta.
+            raise NasError(
+                f"{self.host} ha accettato la connessione ma non ha risposto entro "
+                f"{self.timeout} secondi. Succede quando il NAS e' sotto carico "
+                "(guarda 'nas usage': dischi al 100% rallentano anche le API) o "
+                "quando si passa da un relay QuickConnect. Riprova con piu' tempo: "
+                f"NAS_TIMEOUT={max(90, self.timeout * 3)} davanti al comando, oppure "
+                "nella configurazione.",
+                fatal=True,
+            )
+        except OSError as exc:
+            raise NasError(
+                f"errore di rete verso {self.host}: {exc}", fatal=True
+            )
         if raw and "application/json" not in content_type:
             return payload
         try:
@@ -1352,6 +1370,16 @@ def main():
         die(str(exc))
     except KeyboardInterrupt:
         die("interrotto", 130)
+    except Exception as exc:  # noqa: BLE001
+        # Nessun traceback in faccia a chi usa lo strumento: dice cosa e' andato
+        # storto e come ottenere il dettaglio, se serve a segnalarlo.
+        if truthy(cfg("NAS_DEBUG")):
+            raise
+        die(
+            f"errore imprevisto ({type(exc).__name__}: {exc}). "
+            "Per il dettaglio completo: NAS_DEBUG=1 davanti al comando.",
+            70,
+        )
 
 
 if __name__ == "__main__":
