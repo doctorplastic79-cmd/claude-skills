@@ -2,11 +2,10 @@
 version: 3.2.0 # x-release-please-version
 name: heygen-avatar
 description: |
-  Create a persistent HeyGen avatar — reusable face + voice identity — for the agent, the user, or a named character, via HeyGen Avatar V. Prompt-based by default; photo upload optional for real-person digital twins.
-  Use when: giving the agent a face+voice to present videos ("bring yourself to life", "create your avatar", "give yourself an avatar", "design a presenter"); the user wants their own avatar ("create my avatar", "digital twin of me", "build me an avatar"); creating a named character presenter ("create an avatar called Cleo"); or establishing identity before making videos (the correct FIRST step when no avatar exists).
-  Chain signal: if the request combines an avatar action AND a video action ("create an avatar AND make a video"), run this skill first, then heygen-video.
-  Returns avatar_id + voice_id, passed to heygen-video.
-  NOT for: generating videos (heygen-video), translating videos, or TTS-only tasks.
+  Create a persistent HeyGen avatar (reusable face + voice) for the agent, the user, or a named character. Prompt-based; optional photo for a real-person digital twin.
+  Use when: "create my avatar", "digital twin of me", "give yourself a face/avatar", "design a presenter", "create an avatar called X" — or before any video when no avatar exists yet.
+  Returns avatar_id + voice_id for heygen-video; run this first if the request also asks for a video.
+  NOT for: generating videos (heygen-video), translating videos (heygen-translate), TTS-only.
 argument-hint: "[name_or_description]"
 allowed-tools: Bash, WebFetch, Read, Write, mcp__heygen__*
 ---

@@ -2,11 +2,10 @@
 version: 3.2.0 # x-release-please-version
 name: heygen-translate
 description: |
-  Translate and dub a video into another language with voice cloning and lip-sync, via HeyGen Video Translation. The presenter keeps their face, voice is cloned into the target language, lips re-sync — viewers see the same person speaking natively.
-  Use when: localizing an existing video ("translate this video to Spanish", "dub this into Japanese", "I need this in 10 languages"); keeping the SAME presenter in another language (not a new presenter — that's heygen-video); podcast/audio-only translation; high-stakes translations needing subtitle review before render.
-  Returns the translated video (or audio-only file), one per target language.
-  Chain signal: if no source video exists yet, route to heygen-video and write the script in the target language instead.
-  NOT for: new videos from scratch (heygen-video), avatar creation (heygen-avatar), or text-only translation.
+  Translate and dub an existing video into another language with voice cloning and lip-sync. The presenter keeps their face and voice; lips re-sync to the new audio.
+  Use when: "translate this video to Spanish", "dub this into Japanese", "I need this in 10 languages" — localizing a video, or podcast/audio-only translation. Keeps the SAME presenter.
+  Returns one translated video (or audio file) per target language.
+  NOT for: new videos from scratch (heygen-video), avatar creation (heygen-avatar), text-only translation.
 argument-hint: "[video_url_or_path] [--to language]"
 homepage: https://docs.heygen.com/reference/video-translate
 allowed-tools: Bash, WebFetch, Read, Write, mcp__heygen__*

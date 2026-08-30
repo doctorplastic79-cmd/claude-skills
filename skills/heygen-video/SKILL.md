@@ -2,11 +2,10 @@
 version: 3.2.0 # x-release-please-version
 name: heygen-video
 description: |
-  Generate HeyGen presenter videos via the v3 Video Agent pipeline — handles Frame Check (aspect ratio), prompt engineering, avatar resolution, and voice selection. Required for any HeyGen video generation.
-  Use when: generating any HeyGen video; sending a personalized video message (outreach, update, pitch); creating a presenter-led explainer, tutorial, or product demo; "make a video of me saying...", "send a video to my leads", "record an update for my team", "make a talking head video".
-  Accepts avatar_id from heygen-avatar for identity-first videos, or uses a stock presenter. Returns video share URL + HeyGen session URL.
-  Chain signal: if the request also creates/designs an avatar ("design [presenter] and record"), run heygen-avatar first, then this skill. If a photo is provided, route to heygen-avatar first.
-  NOT for: avatar creation (heygen-avatar), cinematic b-roll without a presenter, translating videos, TTS-only, or streaming avatars.
+  Generate HeyGen presenter videos via the v3 Video Agent pipeline (aspect-ratio check, prompt engineering, avatar and voice resolution). Required for any HeyGen video generation.
+  Use when: "make a video of me saying...", "send a video to my leads", "record an update for my team", "make a talking head video" — personalized messages, explainers, tutorials, product demos.
+  Takes an avatar_id from heygen-avatar, or uses a stock presenter; run heygen-avatar first if a photo is given or an avatar must be designed.
+  NOT for: avatar creation (heygen-avatar), translating videos (heygen-translate), b-roll without a presenter, TTS-only, streaming avatars.
 argument-hint: "[topic_or_script] [--avatar avatar_id]"
 homepage: https://developers.heygen.com/docs/quick-start
 allowed-tools: Bash, WebFetch, Read, Write, mcp__heygen__*
