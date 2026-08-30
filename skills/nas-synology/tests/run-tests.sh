@@ -135,6 +135,29 @@ check "segreto 2FA malformato"      "base32"       1 -- env NAS_OTP_SECRET=xy "$
 reset_session
 check "manca NAS_URL"               "manca NAS_URL" 1 -- env NAS_URL= "$NAS" info
 
+# --- lo script di configurazione ---------------------------------------
+# Sempre con --salta-installazione e --salta-collaudo: qui interessa la sua
+# logica, non che reinstalli la skill o rilanci ricorsivamente queste prove.
+SETUP="$HERE/../scripts/nas-setup.sh"
+check "setup: --help descrive le opzioni" "--non-interattivo" 0 -- "$SETUP" --help
+check "setup: opzione ignota rifiutata"   "opzione sconosciuta" 1 -- "$SETUP" --inventata
+check "setup: senza NAS_URL lo dice"      "serve NAS_URL" 1 -- \
+  env -u NAS_URL NAS_CONFIG="$WORK/setup-a.env" "$SETUP" \
+  --non-interattivo --salta-collaudo --salta-installazione
+check "setup: configura e verifica"       "Pronto" 0 -- \
+  env NAS_CONFIG="$WORK/setup-b.env" "$SETUP" \
+  --non-interattivo --salta-collaudo --salta-installazione
+if [ "$(stat -c '%a' "$WORK/setup-b.env" 2>/dev/null || stat -f '%Lp' "$WORK/setup-b.env" 2>/dev/null)" = "600" ]; then
+  PASS=$((PASS + 1)); printf '.'
+else
+  FAILED+=("setup: il file di configurazione non ha i permessi 600"); printf 'x'
+fi
+if grep -q "^NAS_URL=$NAS_URL$" "$WORK/setup-b.env" 2>/dev/null; then
+  PASS=$((PASS + 1)); printf '.'
+else
+  FAILED+=("setup: NAS_URL non e' finito nella configurazione"); printf 'x'
+fi
+
 # --- TOTP: vettori di prova della RFC 6238 ----------------------------
 if python3 - "$NAS" <<'PY'
 import sys, types

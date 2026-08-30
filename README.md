@@ -143,15 +143,20 @@ backup di Hyper Backup, log. Il client `scripts/nas` parla l'API Web di DSM 7
 usando solo la libreria standard di Python, quindi funziona uguale sul Mac e
 dentro una sessione cloud aperta dal cellulare.
 
-Configurazione in una volta sola:
+Tutto quello che serve sta in un comando solo:
 
 ```bash
 skills/nas-synology/scripts/nas-setup.sh
 ```
 
-Scrive `~/.config/nas-synology/config.env` con permessi `600` e verifica il
-collegamento. Le credenziali stanno li' o nelle variabili d'ambiente, mai in
-questo repository.
+Aggiorna il repository e installa le skill, esegue le 51 prove del client,
+cerca il NAS in rete, chiede le credenziali, offre di creare e installare la
+chiave SSH, scrive `~/.config/nas-synology/config.env` con permessi `600` e
+chiude mostrando lo stato del NAS. Se un passo fallisce si ferma dicendo quale
+e perche'. Con `--non-interattivo` fa lo stesso senza domande, leggendo
+`NAS_URL`, `NAS_USER` e `NAS_PASS` dall'ambiente: e' la forma per gli ambienti
+cloud. Le credenziali stanno solo in quel file o nell'ambiente, mai in questo
+repository.
 
 Perche' funzioni **anche dal cellulare** servono tre cose: la skill caricata
 sull'account claude.ai, il NAS raggiungibile su Internet via HTTPS (DDNS
