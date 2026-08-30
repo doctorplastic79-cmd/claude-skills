@@ -19,7 +19,10 @@ fi
 mkdir -p /run/authorized_keys /run/sshd
 cp "$source_key" "$authorized_key"
 chown root:root "$authorized_key"
-chmod 0600 "$authorized_key"
+# sshd drops to the nasreader uid to read AuthorizedKeysFile, so the file has to
+# be readable by that account. Staying root-owned and non-writable keeps it
+# acceptable to StrictModes; 0600 root-owned would deny every login.
+chmod 0644 "$authorized_key"
 
 if [ ! -s "$host_key" ]; then
   ssh-keygen -q -t ed25519 -N '' -f "$host_key"

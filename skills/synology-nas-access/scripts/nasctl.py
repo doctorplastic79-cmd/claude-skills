@@ -257,8 +257,20 @@ def _entry_type(mode: str) -> str:
     return {"d": "directory", "-": "file", "l": "symlink"}.get(mode[:1], "other")
 
 
-def parse_long_listing(output: str, parent: str) -> List[Dict[str, Any]]:
-    entries: List[Dict[str, Any]] = []
+def _listed_basename(listed_path: str) -> str:
+    """Last component of a listed path, keeping "." and ".." distinguishable.
+
+    PurePosixPath normalizes a trailing "." away, so PurePosixPath("/nas/.").name
+    is "nas": the server's own-directory record would be reported as a phantom
+    child named after its parent. Split the string instead.
+    """
+    trimmed = listed_path.rstrip("/")
+    return trimmed.rsplit("/", 1)[-1] if trimmed else ""
+
+
+def _parse_listing_records(output: str) -> List[Tuple[str, int, str, str]]:
+    """Parse `ls -lan` output into (mode, size, modified, listed_path) records."""
+    records: List[Tuple[str, int, str, str]] = []
     for raw_line in output.splitlines():
         line = raw_line.rstrip("\r")
         if not line or line.startswith("sftp>") or line.startswith("Connected to "):
@@ -271,10 +283,17 @@ def parse_long_listing(output: str, parent: str) -> List[Dict[str, Any]]:
             size = int(parts[4])
         except ValueError:
             continue
-        listed_name = parts[8]
-        if mode.startswith("l") and " -> " in listed_name:
-            listed_name = listed_name.split(" -> ", 1)[0]
-        name = PurePosixPath(listed_name).name
+        listed_path = parts[8]
+        if mode.startswith("l") and " -> " in listed_path:
+            listed_path = listed_path.split(" -> ", 1)[0]
+        records.append((mode, size, " ".join(parts[5:8]), listed_path))
+    return records
+
+
+def parse_long_listing(output: str, parent: str) -> List[Dict[str, Any]]:
+    entries: List[Dict[str, Any]] = []
+    for mode, size, modified, listed_path in _parse_listing_records(output):
+        name = _listed_basename(listed_path)
         if name in ("", ".", "..") or any(ord(ch) < 32 for ch in name) or any(ch in UNSAFE_SHELL_CHARS for ch in name):
             continue
         rel = _relative_join(parent, name)
@@ -287,7 +306,7 @@ def parse_long_listing(output: str, parent: str) -> List[Dict[str, Any]]:
                 "type": _entry_type(mode),
                 "size": size,
                 "mode": mode,
-                "modified": " ".join(parts[5:8]),
+                "modified": modified,
             }
         )
     return entries
@@ -372,15 +391,25 @@ class SftpClient:
     def stat(self, relative: str) -> Dict[str, Any]:
         ensure_not_sensitive(relative)
         target = remote_path(self.cfg, relative)
-        stdout, _ = self.run([f"ls -ldn {sftp_quote(target)}"])
-        parent = str(PurePosixPath(relative).parent)
-        parent = "" if parent == "." else parent
-        entries = parse_long_listing(stdout, parent)
-        if not entries:
-            raise NasError("SFTP server returned no metadata", "invalid_server_response")
-        item = entries[0]
-        item["path"] = relative or "."
-        return item
+        # The OpenSSH sftp client has no "ls -d", so a directory always lists its
+        # contents. One listing still identifies the target either way: a file is
+        # the single record whose path is the target, and a directory carries its
+        # own metadata in the "." record that internal-sftp always returns.
+        stdout, _ = self.run([f"ls -lan {sftp_quote(target)}"])
+        trimmed = target.rstrip("/")
+        for mode, size, modified, listed_path in _parse_listing_records(stdout):
+            listed = listed_path.rstrip("/")
+            if listed != trimmed and listed != trimmed + "/.":
+                continue
+            return {
+                "name": _listed_basename(target) or target,
+                "path": relative or ".",
+                "type": _entry_type(mode),
+                "size": size,
+                "mode": mode,
+                "modified": modified,
+            }
+        raise NasError("SFTP server returned no metadata", "invalid_server_response")
 
     def get(self, relative: str, local_path: Path) -> None:
         ensure_not_sensitive(relative)
