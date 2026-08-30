@@ -145,6 +145,37 @@ check "segreto 2FA malformato"      "base32"       1 -- env NAS_OTP_SECRET=xy "$
 reset_session
 check "manca NAS_URL"               "manca NAS_URL" 1 -- env NAS_URL= "$NAS" info
 
+# --- TLS ---------------------------------------------------------------
+# Un DSM appena installato ha un certificato autofirmato: il client deve
+# riconoscerlo come problema di certificato, non di rete. Il ramo era codice
+# morto perche' urllib incapsula gli errori SSL dentro URLError.
+if command -v openssl >/dev/null; then
+  openssl req -x509 -newkey rsa:2048 -keyout "$WORK/key.pem" -out "$WORK/cert.pem" \
+    -days 1 -nodes -subj "/CN=127.0.0.1" >/dev/null 2>&1
+  TLS_PORT=$((PORT + 1))
+  python3 "$HERE/https_dsm.py" "$TLS_PORT" "$WORK/cert.pem" "$WORK/key.pem" & TLS_PID=$!
+  disown "$TLS_PID" 2>/dev/null || true
+  for _ in $(seq 40); do
+    curl -sk -o /dev/null "https://127.0.0.1:$TLS_PORT/__control/state" && break
+    sleep 0.1
+  done
+  check "TLS: certificato non verificabile diagnosticato come tale" \
+    "certificato TLS non verificabile" 1 -- \
+    env NAS_URL="https://127.0.0.1:$TLS_PORT" NAS_CACHE_DIR="$WORK/tls" "$NAS" info
+  check "TLS: --insecure permette comunque di leggere" "DS923+" 0 -- \
+    env NAS_URL="https://127.0.0.1:$TLS_PORT" NAS_CACHE_DIR="$WORK/tls2" "$NAS" info --insecure
+  kill "$TLS_PID" 2>/dev/null
+else
+  echo -n " (prove TLS saltate: openssl assente)"
+fi
+
+# Python senza CA di sistema: causa diversa, messaggio diverso.
+if python3 "$HERE/check_tls_hints.py" "$NAS"; then
+  PASS=$((PASS + 1)); printf '.'
+else
+  FAILED+=("TLS: i messaggi non distinguono CA mancanti da certificato del NAS"); printf 'x'
+fi
+
 # --- lo script di configurazione ---------------------------------------
 # Sempre con --salta-installazione e --salta-collaudo: qui interessa la sua
 # logica, non che reinstalli la skill o rilanci ricorsivamente queste prove.

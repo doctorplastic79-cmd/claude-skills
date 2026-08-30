@@ -158,9 +158,9 @@ risponde come quello vero.
 tests/run-tests.sh
 ```
 
-51 prove: lettura, file, blocchi sulle scritture, re-login su sessione scaduta,
-messaggi d'errore, logica di `nas-setup.sh`, e i codici TOTP contro i vettori
-della RFC 6238. Eseguile
+55 prove: lettura, file, blocchi sulle scritture, re-login su sessione scaduta,
+diagnosi TLS, messaggi d'errore, logica di `nas-setup.sh`, e i codici TOTP
+contro i vettori della RFC 6238. Eseguile
 dopo ogni modifica al client, e aggiungine una quando aggiungi un comando: e'
 l'unico modo per accorgersi di una regressione senza avere il NAS davanti.
 

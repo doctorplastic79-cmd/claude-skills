@@ -104,8 +104,17 @@ serve mai.
 invisibile alle sessioni cloud: dal cellulare non funzionerebbe. Buona scelta se
 ti basta usare la skill dal Mac.
 
-**c. QuickConnect.** Comodo per le app Synology, ma passa da un relay e non
-offre un endpoint API stabile: la skill non lo usa.
+**c. QuickConnect.** Comodo per le app Synology. L'API web spesso risponde
+anche attraverso il relay, quindi come `NAS_URL` puo' funzionare, ma con due
+avvertenze che contano:
+
+- **SSH non passa da QuickConnect.** Il relay inoltra il traffico web di DSM,
+  non SSH: un indirizzo `*.quickconnect.to` risolve a un server Synology, non
+  al tuo NAS. `nas-setup.sh` se ne accorge e chiede l'indirizzo locale invece
+  di installare la chiave su una macchina di terzi.
+- **Il traffico passa da un relay Synology**, non e' una connessione diretta.
+
+Per un uso serio da fuori casa, la strada (a) resta migliore.
 
 Qualunque strada scegli, tieni attivi **Auto Block** (Sicurezza > Protezione) e
 il firewall di DSM, e limita l'accesso ai paesi da cui ti connetti davvero.
