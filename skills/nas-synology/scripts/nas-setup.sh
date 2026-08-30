@@ -16,6 +16,14 @@
 # Le credenziali finiscono solo in ~/.config/nas-synology/config.env (chmod 600).
 # Lo script non le stampa mai e non le scrive da nessun'altra parte.
 
+# Serve bash: lo script usa BASH_SOURCE, [[ ]] e read -rp. Chi lo lancia con
+# "sh nas-setup.sh" — cosa che capita, e capita soprattutto quando il bit di
+# esecuzione e' andato perso — otterrebbe un "Bad substitution" alla riga 21,
+# che non dice niente a nessuno. Meglio ripartire con l'interprete giusto.
+if [ -z "${BASH_VERSION:-}" ]; then
+  exec bash "$0" "$@"
+fi
+
 set -u
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -69,7 +77,20 @@ command -v python3 >/dev/null || fail "manca python3: il client non puo' funzion
 command -v curl    >/dev/null || fail "manca curl: serve per trovare il NAS in rete."
 ok "python3 $(python3 -c 'import sys; print("%d.%d.%d" % sys.version_info[:3])')"
 ok "curl presente"
-[ -x "$NAS" ] || fail "non trovo il client eseguibile in $NAS"
+# Il bit di esecuzione si perde per strada: la sincronizzazione delle skill
+# verso una sessione cloud consegna i file come 100644 anche quando nel
+# repository sono 100755. Fermarsi qui vorrebbe dire che la skill non parte
+# in tutta una classe di ambienti, per un permesso. Se il file c'e', glielo
+# si rimette.
+if [ ! -x "$NAS" ] && [ -f "$NAS" ]; then
+  chmod +x "$NAS" 2>/dev/null || true
+  for f in "$SKILL_DIR"/scripts/*.sh "$SKILL_DIR"/tests/*.sh "$SKILL_DIR"/tests/*.py; do
+    [ -f "$f" ] && chmod +x "$f" 2>/dev/null || true
+  done
+  [ -x "$NAS" ] && info "permesso di esecuzione rimesso al client (era andato perso nella copia)"
+fi
+[ -f "$NAS" ] || fail "non trovo il client in $NAS"
+[ -x "$NAS" ] || fail "il client in $NAS non e' eseguibile e non riesco a correggerlo: prova 'chmod +x $NAS'"
 
 # ------------------------------------------------------------- 2. installazione
 step "Installazione della skill"

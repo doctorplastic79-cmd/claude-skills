@@ -18,6 +18,10 @@ qualunque operazione:
 scripts/nas check
 ```
 
+Se risponde `Permission denied`, il bit di esecuzione si e' perso nella copia
+della skill: `scripts/nas-setup.sh` lo rimette da solo, oppure si aggira con
+`python3 scripts/nas check` — il client e' un normale script Python.
+
 Dice in tre righe se le credenziali ci sono, se il NAS risponde e quale
 trasporto e' disponibile.
 
