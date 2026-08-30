@@ -446,7 +446,12 @@ class SSH:
     """Trasporto shell, disponibile solo dove il NAS e' raggiungibile via SSH."""
 
     def __init__(self):
-        self.host = cfg("NAS_SSH_HOST") or cfg("NAS_URL", "").split("://")[-1].split(":")[0]
+        # NAS_SSH_HOST va dichiarato: dedurlo da NAS_URL sembra comodo ma e'
+        # sbagliato. L'indirizzo web e' spesso un DDNS pubblico, e la porta 22
+        # di casa non deve essere ne' aperta ne' tentata; senza questa
+        # distinzione "SSH disponibile" sarebbe sempre vero e ogni comando
+        # finirebbe in un timeout invece che in un messaggio utile.
+        self.host = cfg("NAS_SSH_HOST")
         self.user = cfg("NAS_SSH_USER", cfg("NAS_USER"))
         self.port = cfg("NAS_SSH_PORT", "22")
         self.key = cfg("NAS_SSH_KEY")
@@ -456,9 +461,12 @@ class SSH:
 
     def run(self, command, check=True):
         if not self.available():
+            missing = "NAS_SSH_HOST" if not self.host else (
+                "NAS_SSH_USER" if not self.user else "il comando ssh")
             raise NasError(
-                "SSH non configurato o non disponibile qui. Serve NAS_SSH_HOST, "
-                "NAS_SSH_USER e una chiave; nelle sessioni cloud di solito il NAS "
+                f"SSH non configurato: manca {missing}. Rilancia nas-setup.sh e "
+                "rispondi si' alla domanda su SSH, oppure aggiungi NAS_SSH_HOST "
+                "alla configurazione. Dalle sessioni cloud e dal cellulare il NAS "
                 "non e' raggiungibile via SSH: usa i comandi basati su API."
             )
         argv = [
@@ -472,6 +480,16 @@ class SSH:
             argv += ["-i", os.path.expanduser(self.key)]
         argv += [f"{self.user}@{self.host}", command]
         proc = subprocess.run(argv, capture_output=True, text=True)
+        if proc.returncode == 255:
+            # 255 e' ssh stesso che non e' riuscito a collegarsi, non il comando
+            # remoto che fallisce: le cause sono poche e vale la pena dirle.
+            raise NasError(
+                f"non riesco a collegarmi via SSH a {self.user}@{self.host}:{self.port} "
+                f"({proc.stderr.strip().splitlines()[-1] if proc.stderr.strip() else 'nessun dettaglio'}). "
+                "Controlla che SSH sia attivo in DSM (Pannello di controllo > Terminale "
+                "e SNMP), che tu sia sulla stessa rete del NAS o in VPN, e che la chiave "
+                "in NAS_SSH_KEY sia installata sul NAS."
+            )
         if check and proc.returncode != 0:
             raise NasError(
                 f"comando SSH fallito (exit {proc.returncode}): "

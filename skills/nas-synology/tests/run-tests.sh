@@ -32,6 +32,7 @@ cleanup() {
 trap cleanup EXIT
 
 python3 "$HERE/fake_dsm.py" "$PORT" & SERVER_PID=$!
+disown "$SERVER_PID" 2>/dev/null || true   # evita il "Terminated: 15" di bash su macOS
 for _ in $(seq 40); do
   curl -sf -o /dev/null "$NAS_URL/__control/state" && break
   sleep 0.1
@@ -110,7 +111,16 @@ check "NAS_READONLY blocca il put"  "NAS_READONLY" 2 -- env NAS_READONLY=1 "$NAS
 # --- SSH: euristica sui comandi distruttivi ---------------------------
 check "ssh rifiuta rm senza --yes"  "sola lettura" 2 -- "$NAS" ssh rm -rf /volume1
 check "ssh rifiuta la redirezione"  "sola lettura" 2 -- "$NAS" ssh 'cat /etc/passwd > /tmp/x'
-check "ssh non configurato lo dice" "SSH non configurato" 1 -- "$NAS" ssh df -h
+# Questa prova passava sul container solo perche' li' ssh non e' installato:
+# su un Mac il client deduceva l'host da NAS_URL e tentava davvero la porta 22.
+# Ora NAS_SSH_HOST e' obbligatorio, quindi il caso e' deterministico ovunque.
+check "ssh senza NAS_SSH_HOST lo dice" "manca NAS_SSH_HOST" 1 -- "$NAS" ssh df -h
+if command -v ssh >/dev/null; then
+  check "ssh irraggiungibile spiega cosa controllare" "Terminale" 1 -- \
+    env NAS_SSH_HOST=127.0.0.1 NAS_SSH_PORT=1 NAS_SSH_USER=nessuno "$NAS" ssh df -h --yes
+else
+  echo -n " (prova ssh saltata: comando assente)"
+fi
 
 # --- sessione ----------------------------------------------------------
 if [ "$(stat -c '%a' "$NAS_CACHE_DIR/session.json" 2>/dev/null || stat -f '%Lp' "$NAS_CACHE_DIR/session.json" 2>/dev/null)" = "600" ]; then
