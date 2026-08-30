@@ -90,6 +90,7 @@ scripts/nas packages        # pacchetti installati e stato
 scripts/nas docker          # container di Container Manager
 scripts/nas backups         # task di Hyper Backup e ultimo esito
 scripts/nas updates         # aggiornamenti DSM disponibili
+scripts/nas security        # esito dell'analisi di sicurezza di DSM
 scripts/nas users           # utenti locali
 scripts/nas package stop Docker --yes
 scripts/nas ssh 'df -h'     # shell, solo dove SSH e' disponibile
@@ -158,7 +159,7 @@ risponde come quello vero.
 tests/run-tests.sh
 ```
 
-55 prove: lettura, file, blocchi sulle scritture, re-login su sessione scaduta,
+62 prove: lettura, file, blocchi sulle scritture, re-login su sessione scaduta,
 diagnosi TLS, messaggi d'errore, logica di `nas-setup.sh`, e i codici TOTP
 contro i vettori della RFC 6238. Eseguile
 dopo ogni modifica al client, e aggiungine una quando aggiungi un comando: e'
