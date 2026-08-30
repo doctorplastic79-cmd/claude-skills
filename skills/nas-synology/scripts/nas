@@ -1230,9 +1230,10 @@ def cmd_ssh(dsm, args):
 
 READONLY_CMDS = {
     "ls", "cat", "df", "du", "free", "uptime", "uname", "id", "whoami", "date", "ps",
-    "top", "head", "tail", "grep", "find", "stat", "which", "echo", "wc", "sort", "diff",
+    "top", "head", "tail", "grep", "egrep", "find", "stat", "which", "echo", "wc",
+    "sort", "uniq", "cut", "awk", "sed", "tr", "column", "diff", "file", "realpath",
     "synopkg", "synoservice", "smartctl", "btrfs", "zpool", "zfs", "mdadm", "lsblk",
-    "docker", "hostname", "ip", "netstat", "ss", "dmesg", "sensors",
+    "docker", "hostname", "ip", "netstat", "ss", "dmesg", "sensors", "getcfg",
 }
 WRITE_WORDS = re.compile(
     r"\b(rm|mv|cp|dd|mkfs|shutdown|reboot|poweroff|chmod|chown|kill|killall|truncate|"
@@ -1240,11 +1241,34 @@ WRITE_WORDS = re.compile(
 )
 
 
+# Redirezioni che non scrivono da nessuna parte: verso /dev/null e fra
+# descrittori. Bloccare anche queste rendeva scomodo un `2>/dev/null`, che e'
+# il modo normale di zittire gli errori di permesso in un `du`.
+INNOCUE = re.compile(r"\d?>\s*/dev/null|\d?>&\d")
+PREFISSI = ("sudo", "env", "time", "nice", "ionice")
+
+
+def _comando_di(segmento):
+    """Il comando vero di un segmento, saltando i prefissi che ne avvolgono
+    un altro: in `sudo du -sh` quello che conta e' `du`."""
+    parole = segmento.split()
+    while parole and Path(parole[0]).name in PREFISSI:
+        parole = parole[1:]
+        while parole and parole[0].startswith("-"):
+            parole = parole[1:]
+    return Path(parole[0]).name if parole else ""
+
+
 def _looks_readonly(command):
-    if WRITE_WORDS.search(command) or ">" in command:
+    ripulito = INNOCUE.sub("", command)
+    if WRITE_WORDS.search(ripulito) or ">" in ripulito:
         return False
-    first = command.strip().split()[0] if command.strip() else ""
-    return Path(first).name in READONLY_CMDS
+    # Ogni segmento della catena deve essere di sola lettura, non solo il
+    # primo: in `du | tee elenco.txt` il comando che scrive e' il secondo.
+    segmenti = [s.strip() for s in re.split(r"\||;|&&", ripulito) if s.strip()]
+    if not segmenti:
+        return False
+    return all(_comando_di(s) in READONLY_CMDS for s in segmenti)
 
 
 def cmd_api(dsm, args):
