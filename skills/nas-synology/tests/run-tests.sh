@@ -121,15 +121,34 @@ check "NAS_READONLY blocca il put"  "NAS_READONLY" 2 -- env NAS_READONLY=1 "$NAS
 # --- SSH: euristica sui comandi distruttivi ---------------------------
 check "ssh rifiuta rm senza --yes"  "sola lettura" 2 -- "$NAS" ssh rm -rf /volume1
 check "ssh rifiuta la redirezione"  "sola lettura" 2 -- "$NAS" ssh 'cat /etc/passwd > /tmp/x'
+check "ssh rifiuta di scrivere con tee" "sola lettura" 2 -- \
+  "$NAS" ssh 'du -sh /volume1/* | tee /tmp/elenco'
+check "ssh rifiuta rm dopo la pipe"  "sola lettura" 2 -- \
+  "$NAS" ssh 'find /volume1 -name "*.tmp" | xargs rm'
 # Questa prova passava sul container solo perche' li' ssh non e' installato:
 # su un Mac il client deduceva l'host da NAS_URL e tentava davvero la porta 22.
 # Ora NAS_SSH_HOST e' obbligatorio, quindi il caso e' deterministico ovunque.
 check "ssh senza NAS_SSH_HOST lo dice" "manca NAS_SSH_HOST" 1 -- "$NAS" ssh df -h
+# Questi arrivano al trasporto SSH, cioe' hanno superato l'euristica: se
+# fossero bocciati uscirebbero con 2 e il messaggio "sola lettura".
+check "ssh accetta 2>/dev/null"      "manca NAS_SSH_HOST" 1 -- \
+  "$NAS" ssh 'du -sh /volume1/* 2>/dev/null | sort -h'
+check "ssh accetta sudo du"          "manca NAS_SSH_HOST" 1 -- \
+  "$NAS" ssh 'sudo du -sh /volume1/*'
+check "ssh accetta una pipe lunga"   "manca NAS_SSH_HOST" 1 -- \
+  "$NAS" ssh 'cat /proc/mdstat | grep -v ^$ | head -20' 
 if command -v ssh >/dev/null; then
   check "ssh irraggiungibile spiega cosa controllare" "Terminale" 1 -- \
     env NAS_SSH_HOST=127.0.0.1 NAS_SSH_PORT=1 NAS_SSH_USER=nessuno "$NAS" ssh df -h --yes
 else
   echo -n " (prova ssh saltata: comando assente)"
+fi
+
+# La tabella completa dell'euristica: entrambi i lati dell'errore possibile.
+if python3 "$HERE/check_ssh_heuristic.py" "$NAS"; then
+  PASS=$((PASS + 1)); printf '.'
+else
+  FAILED+=("euristica SSH: un comando classificato male"); printf 'x'
 fi
 
 # --- sessione ----------------------------------------------------------
