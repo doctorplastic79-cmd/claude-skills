@@ -153,7 +153,8 @@ cloud: le sessioni cloud sono effimere e non vedono la rete Tailscale.
 
 Chiavi private, `.env` e `config.json` vivono fuori dal repository (in
 `~/.config/claude-nas/`) e non vanno mai committati. Passo per passo in
-`skills/synology-nas-access/references/setup.md`.
+`skills/synology-nas-access/references/setup.md`; per farlo eseguire a un
+agent c'è il runbook `references/attivazione-agent.md`.
 
 ## Licenze
 
