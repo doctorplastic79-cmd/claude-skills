@@ -70,6 +70,9 @@ check "shares elenca le condivisioni" "Drive"      0 -- "$NAS" shares
 check "users elenca gli utenti"     "claude"       0 -- "$NAS" users
 check "connections mostra chi c'e'" "192.168.1.5"  0 -- "$NAS" connections
 check "packages elenca i pacchetti" "Docker"       0 -- "$NAS" packages
+check "packages: stato al primo livello" "running" 0 -- "$NAS" packages
+check "packages: stato annidato in additional" "Foto" 0 -- "$NAS" packages
+check "packages: conta i pacchetti"  "3 pacchetti"  0 -- "$NAS" packages
 check "docker elenca i container"   "plex"         0 -- "$NAS" docker
 check "ls elenca i file"            "nota.txt"     0 -- "$NAS" ls /volume1/Drive
 check "ls senza percorso -> share"  "Drive"        0 -- "$NAS" ls

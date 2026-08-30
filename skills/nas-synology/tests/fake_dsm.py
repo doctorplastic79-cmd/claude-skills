@@ -125,9 +125,14 @@ def dispatch(query, has_body):
             {"name": "video", "vol_path": "/volume1", "desc": ""},
         ]})
     if api == "SYNO.Core.Package":
+        # Due forme diverse nella stessa risposta: DSM 7.2 mette i campi al
+        # primo livello, 7.3 li annida sotto `additional`. Il client deve
+        # leggerle entrambe, altrimenti la colonna esce vuota.
         return ok({"packages": [
             {"id": "Docker", "version": "24.0", "status": "running",
              "description": "Container Manager"},
+            {"id": "SynologyPhotos", "version": "1.9.0-10924",
+             "additional": {"status": "running", "description": "Foto"}},
             {"id": "HyperBackup", "version": "4.1", "status": "stopped",
              "description": "Backup"},
         ]})
