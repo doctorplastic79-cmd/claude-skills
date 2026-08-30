@@ -11,6 +11,7 @@ riutilizzabili e non appesantiscono il codice delle applicazioni.
 | `skills/heygen-avatar` | crea un avatar HeyGen persistente (volto + voce) per l'agente, l'utente o un personaggio |
 | `skills/heygen-video` | genera video HeyGen con presenter, dall'idea allo script al video finito |
 | `skills/heygen-translate` | traduce e doppia un video esistente in un'altra lingua, con voice cloning e lip-sync |
+| `skills/nas-synology` | entra nel NAS Synology e lo gestisce: dischi, spazio, file, pacchetti, backup, log |
 
 | Preset | A cosa serve |
 |---|---|
@@ -134,6 +135,43 @@ automatica dell'MCP. La chiave va messa nell'ambiente di chi usa la skill
 (shell profile o `.env` locale), mai in questo repository. Dettagli completi
 nei singoli `SKILL.md` e nel repository originale.
 
+## Skill NAS Synology
+
+`nas-synology` fa entrare Claude nel NAS di casa e glielo fa gestire: stato di
+dischi e volumi, spazio libero, cartelle condivise, file, pacchetti e container,
+backup di Hyper Backup, log. Il client `scripts/nas` parla l'API Web di DSM 7
+usando solo la libreria standard di Python, quindi funziona uguale sul Mac e
+dentro una sessione cloud aperta dal cellulare.
+
+Configurazione in una volta sola:
+
+```bash
+skills/nas-synology/scripts/nas-setup.sh
+```
+
+Scrive `~/.config/nas-synology/config.env` con permessi `600` e verifica il
+collegamento. Le credenziali stanno li' o nelle variabili d'ambiente, mai in
+questo repository.
+
+Perche' funzioni **anche dal cellulare** servono tre cose: la skill caricata
+sull'account claude.ai, il NAS raggiungibile su Internet via HTTPS (DDNS
+Synology + certificato Let's Encrypt) e le variabili `NAS_URL`, `NAS_USER`,
+`NAS_PASS`, `NAS_OTP_SECRET` impostate nelle variabili d'ambiente del cloud
+environment, con il dominio del NAS ammesso dalla network policy. La skill pesa
+80 KB, quindi si carica intera, senza il loader che serve a `video-shotcraft`:
+
+```bash
+./package-for-claude-ai.sh nas-synology
+```
+
+e poi *Impostazioni > Capacita' > Skill > Carica skill* su claude.ai. Dal Mac in
+LAN si aggiunge il trasporto SSH, che apre la shell di DSM.
+
+Le operazioni che modificano il NAS richiedono il flag `--yes`; formattazioni,
+RAID, rete, account e spegnimento restano fuori dalla portata della skill e
+vanno fatte da DSM. `NAS_READONLY=1` mette tutto in sola lettura. Dettagli in
+`skills/nas-synology/references/`.
+
 ## Licenze
 
 Ogni skill mantiene la licenza originale, nel file `LICENSE` della sua cartella.
@@ -143,4 +181,5 @@ Ogni skill mantiene la licenza originale, nel file `LICENSE` della sua cartella.
   `skills/video-shotcraft/assets/audio/ATTRIBUTION.md`.
 - `heygen-avatar`, `heygen-video`, `heygen-translate` — MIT, di
   [HeyGen](https://github.com/heygen-com/skills).
+- `nas-synology` — MIT, scritta per questo repository.
 
