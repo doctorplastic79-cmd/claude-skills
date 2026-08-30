@@ -19,8 +19,31 @@ scripts/nas check
 ```
 
 Dice in tre righe se le credenziali ci sono, se il NAS risponde e quale
-trasporto e' disponibile. Se fallisce, leggi `references/setup.md` e guida
-l'utente alla configurazione invece di tentare comandi a caso.
+trasporto e' disponibile.
+
+**Se fallisce perche' non c'e' configurazione, non guidare l'utente a mano
+attraverso i passaggi: c'e' uno script che li fa tutti.**
+
+```bash
+scripts/nas-setup.sh
+```
+
+Aggiorna e installa la skill, esegue le prove del client, cerca il NAS in rete
+(nomi soliti e, se serve e l'utente acconsente, scansione della LAN), chiede le
+credenziali, offre di creare e installare la chiave SSH, scrive
+`~/.config/nas-synology/config.env` con permessi `600` e chiude con `check` e
+`health` sul NAS vero. Se qualcosa non va, si ferma dicendo quale passo e
+perche'.
+
+Negli ambienti senza nessuno a cui chiedere - una sessione cloud con le
+variabili gia' impostate - la stessa cosa in un colpo solo:
+
+```bash
+scripts/nas-setup.sh --non-interattivo
+```
+
+Solo se lo script si ferma su un punto che richiede una decisione umana (creare
+l'utente DSM, aprire il NAS su Internet) porta l'utente su `references/setup.md`.
 
 ### I due trasporti, e quando ci sono
 
@@ -135,8 +158,9 @@ risponde come quello vero.
 tests/run-tests.sh
 ```
 
-45 prove: lettura, file, blocchi sulle scritture, re-login su sessione scaduta,
-messaggi d'errore, e i codici TOTP contro i vettori della RFC 6238. Eseguile
+51 prove: lettura, file, blocchi sulle scritture, re-login su sessione scaduta,
+messaggi d'errore, logica di `nas-setup.sh`, e i codici TOTP contro i vettori
+della RFC 6238. Eseguile
 dopo ogni modifica al client, e aggiungine una quando aggiungi un comando: e'
 l'unico modo per accorgersi di una regressione senza avere il NAS davanti.
 
