@@ -167,6 +167,13 @@ environment, con il dominio del NAS ammesso dalla network policy. La skill pesa
 e poi *Impostazioni > Capacita' > Skill > Carica skill* su claude.ai. Dal Mac in
 LAN si aggiunge il trasporto SSH, che apre la shell di DSM.
 
+Il client ha un collaudo che non richiede un NAS, da eseguire dopo ogni
+modifica:
+
+```bash
+skills/nas-synology/tests/run-tests.sh
+```
+
 Le operazioni che modificano il NAS richiedono il flag `--yes`; formattazioni,
 RAID, rete, account e spegnimento restano fuori dalla portata della skill e
 vanno fatte da DSM. `NAS_READONLY=1` mette tutto in sola lettura. Dettagli in

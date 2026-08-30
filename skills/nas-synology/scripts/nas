@@ -664,9 +664,18 @@ def fs_upload(dsm, local, dest_folder, overwrite=False):
         f"filename=\"{local.name}\"\r\nContent-Type: application/octet-stream\r\n\r\n"
     ).encode()
     body += local.read_bytes() + f"\r\n--{boundary}--\r\n".encode()
+    # api/version/method vanno nel corpo multipart, come da guida File Station,
+    # ma diverse versioni di DSM li leggono solo dalla query string: passarli in
+    # entrambi i posti con gli stessi valori e' l'unica forma che funziona
+    # ovunque, e la duplicazione e' innocua.
     resp = dsm._http(
         path,
-        {"_sid": dsm._sid},
+        {
+            "api": "SYNO.FileStation.Upload",
+            "version": version,
+            "method": "upload",
+            "_sid": dsm._sid,
+        },
         body=body,
         headers={"Content-Type": f"multipart/form-data; boundary={boundary}"},
     )

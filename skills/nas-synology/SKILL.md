@@ -1,6 +1,6 @@
 ---
 name: nas-synology
-description: Accede al NAS Synology (DSM 7) dell'utente e lo gestisce in autonomia - stato di dischi e volumi, spazio libero, cartelle condivise, file (elenco, ricerca, download, upload, spostamento, eliminazione), pacchetti e container, utenti e connessioni, backup di Hyper Backup, aggiornamenti DSM, log e diagnosi. Usare quando l'utente dice "entra nel NAS", "controlla il NAS", "quanto spazio e' rimasto", "il NAS e' pieno", "prendi/metti questo file sul NAS", "come stanno i dischi", "fai partire il backup", "riavvia Docker sul NAS", o nomina Synology, DiskStation, DSM, QuickConnect. Funziona sia dal Mac (API + SSH) sia da cellulare via sessioni cloud (solo API). NON per NAS QNAP, TrueNAS, Unraid o per Google Drive e altri cloud.
+description: Accede al NAS Synology (DSM 7) dell'utente e lo gestisce in autonomia - stato di dischi e volumi, spazio libero, cartelle condivise, file (elenco, ricerca, download, upload, spostamento, eliminazione), pacchetti e container, utenti e connessioni, backup di Hyper Backup, aggiornamenti DSM, log e diagnosi. Usare ogni volta che la richiesta riguarda il NAS di casa, anche quando l'utente non lo nomina per esteso: "entra nel NAS", "controlla il NAS", "quanto spazio e' rimasto", "il NAS e' pieno", "libera spazio", "prendi/metti questo file sul NAS", "come stanno i dischi", "il backup e' andato?", "ordina le foto sul disco di rete", "riavvia Docker sul NAS", oppure quando compare Synology, DiskStation, DSM, QuickConnect, /volume1. Nel dubbio fra rispondere a memoria e leggere lo stato reale, usare la skill: i dati del NAS non si indovinano. Funziona sia dal Mac (API + SSH) sia da cellulare via sessioni cloud (solo API). NON per NAS QNAP, TrueNAS, Unraid, ne' per Google Drive, Dropbox, MEGA e altri cloud.
 ---
 
 # NAS Synology
@@ -126,6 +126,20 @@ Le procedure passo-passo stanno in `references/operations.md`: volume quasi
 pieno, disco che peggiora nello SMART, backup fallito, pacchetto che non parte,
 NAS lento, pulizia di file duplicati o temporanei.
 
+## Modificare il client
+
+`scripts/nas` ha un banco di prova che non richiede un NAS: un finto DSM che
+risponde come quello vero.
+
+```bash
+tests/run-tests.sh
+```
+
+45 prove: lettura, file, blocchi sulle scritture, re-login su sessione scaduta,
+messaggi d'errore, e i codici TOTP contro i vettori della RFC 6238. Eseguile
+dopo ogni modifica al client, e aggiungine una quando aggiungi un comando: e'
+l'unico modo per accorgersi di una regressione senza avere il NAS davanti.
+
 ## Riferimenti
 
 | File | Quando leggerlo |
@@ -135,3 +149,4 @@ NAS lento, pulizia di file duplicati o temporanei.
 | `references/api-map.md` | mappa delle API DSM, codici di errore, come scoprirne di nuove |
 | `references/ssh-playbook.md` | comandi shell di DSM, con quelli distruttivi segnalati |
 | `references/safety.md` | cosa richiede conferma, cosa non si fa mai, come recuperare |
+| `tests/` | finto DSM e collaudo automatico, da eseguire dopo ogni modifica a `scripts/nas` |
