@@ -644,6 +644,8 @@ CANDIDATES = {
          {"additional": ["real_path", "owner", "volume_status"]}),
     ],
     "packages": [
+        ("SYNO.Core.Package", "list", None,
+         {"additional": ["status", "description", "startable", "install_type"]}),
         ("SYNO.Core.Package", "list", None, {"additional": ["status", "description"]}),
     ],
     "package-updates": [
@@ -978,13 +980,38 @@ cmd_backups = _simple_list(
 )
 
 
+def campo(pacchetto, *nomi):
+    """DSM mette i campi richiesti con `additional` a volte al primo livello e
+    a volte annidati sotto `additional`: cambia con la versione. Cercare in
+    entrambi i posti evita colonne vuote che sembrano dati mancanti."""
+    for nome in nomi:
+        valore = pacchetto.get(nome)
+        if valore in (None, ""):
+            valore = dig(pacchetto, "additional", nome)
+        if valore not in (None, ""):
+            return valore
+    return None
+
+
 def cmd_packages(dsm, args):
     data = fetch(dsm, "packages")
 
     def show(d):
-        rows = [[p.get("id"), p.get("version"), p.get("status", "-"),
-                 (p.get("description") or "")[:48]] for p in rows_of(d, "packages")]
-        print(table(sorted(rows), ["pacchetto", "versione", "stato", "descrizione"]))
+        rows = []
+        for pkg in rows_of(d, "packages"):
+            stato = campo(pkg, "status", "install_status", "additional_status")
+            avviabile = campo(pkg, "startable")
+            if stato is None and avviabile is not None:
+                stato = "avviabile" if avviabile else "servizio"
+            rows.append([
+                campo(pkg, "id", "name"),
+                campo(pkg, "version"),
+                stato or "installato",
+                (campo(pkg, "description", "desc") or "")[:44],
+            ])
+        print(table(sorted(rows, key=lambda r: str(r[0]).lower()),
+                    ["pacchetto", "versione", "stato", "descrizione"]))
+        print(f"\n  {len(rows)} pacchetti installati")
 
     emit(args, data, show)
 

@@ -149,7 +149,7 @@ Tutto quello che serve sta in un comando solo:
 skills/nas-synology/scripts/nas-setup.sh
 ```
 
-Aggiorna il repository e installa le skill, esegue le 65 prove del client,
+Aggiorna il repository e installa le skill, esegue le 68 prove del client,
 cerca il NAS in rete, chiede le credenziali, offre di creare e installare la
 chiave SSH, scrive `~/.config/nas-synology/config.env` con permessi `600` e
 chiude mostrando lo stato del NAS. Se un passo fallisce si ferma dicendo quale
