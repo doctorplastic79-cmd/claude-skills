@@ -99,6 +99,18 @@ File Station:
 | 417 | errore di I/O: sospetta un disco che sta cedendo |
 | 421 | risorsa occupata |
 
+## Certificati
+
+Un errore di verifica TLS ha due cause molto diverse, e il client le distingue:
+
+- **il certificato del NAS non e' verificabile** - tipico di DSM appena
+  installato, che ha un autofirmato. Si risolve con Let's Encrypt in DSM,
+  `NAS_CA_BUNDLE`, o `NAS_VERIFY_TLS=no` solo su LAN fidata.
+- **questo Python non ha nessuna CA caricata** - allora fallirebbe verso
+  qualunque sito, NAS compreso ma non solo. Capita con i build python.org su
+  macOS finche' non si esegue `Install Certificates.command`. Il client prova
+  prima `certifi`, e se non c'e' lo dice invece di far cercare la causa sul NAS.
+
 ## Percorsi
 
 Le API vogliono percorsi assoluti che iniziano dalla condivisione, non dal

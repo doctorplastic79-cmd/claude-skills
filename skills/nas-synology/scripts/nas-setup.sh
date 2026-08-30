@@ -217,11 +217,49 @@ if [ "${SKIP_WRITE:-0}" != 1 ]; then
     ask "Segreto 2FA base32 (invio per saltare)" OTP ""
   fi
 
+  # L'host SSH non si deduce da quello web. Un indirizzo QuickConnect e' un
+  # relay di Synology, un DDNS e' il tuo indirizzo pubblico: in un caso la
+  # chiave finirebbe su una macchina di terzi, nell'altro si tenterebbe la
+  # porta 22 di casa, che non deve essere aperta. SSH ha senso solo verso
+  # l'indirizzo del NAS sulla rete locale o in VPN.
+  is_local_host() {
+    case "$1" in
+      *.quickconnect.to|*.quickconnect.cn) return 1 ;;
+      *.local|localhost|127.*)             return 0 ;;
+      10.*|192.168.*)                      return 0 ;;
+      172.1[6-9].*|172.2[0-9].*|172.3[01].*) return 0 ;;
+      *)                                   return 1 ;;
+    esac
+  }
+
   SSH_HOST=""; SSH_USER=""; SSH_KEY=""
   if [ "$INTERACTIVE" = 1 ] && command -v ssh >/dev/null; then
-    HOSTPART="${FOUND#*://}"; HOSTPART="${HOSTPART%%:*}"
-    if confirm "Configuro anche SSH verso $HOSTPART, per la shell di DSM?"; then
-      SSH_HOST="$HOSTPART"
+    WEBHOST="${FOUND#*://}"; WEBHOST="${WEBHOST%%:*}"
+    SSH_TARGET=""
+    if is_local_host "$WEBHOST"; then
+      confirm "Configuro anche SSH verso $WEBHOST, per la shell di DSM?" \
+        && SSH_TARGET="$WEBHOST"
+    else
+      case "$WEBHOST" in
+        *.quickconnect.*)
+          info "$WEBHOST e' un relay QuickConnect di Synology: inoltra il traffico"
+          info "web di DSM, non SSH. La chiave finirebbe su una macchina non tua." ;;
+        *)
+          info "$WEBHOST e' un indirizzo pubblico: SSH andrebbe verso la porta 22"
+          info "di casa, che e' meglio non aprire." ;;
+      esac
+      info "SSH serve solo dal Mac sulla stessa rete del NAS (o in VPN)."
+      if confirm "Vuoi configurarlo verso l'indirizzo locale del NAS?"; then
+        ask "Indirizzo locale del NAS (es. 192.168.1.10)" SSH_TARGET ""
+        if [ -n "$SSH_TARGET" ] && ! is_local_host "$SSH_TARGET"; then
+          warn "$SSH_TARGET non sembra un indirizzo di rete locale; salto SSH."
+          SSH_TARGET=""
+        fi
+      fi
+    fi
+
+    if [ -n "$SSH_TARGET" ]; then
+      SSH_HOST="$SSH_TARGET"
       ask "Utente SSH" SSH_USER "$USER_NAME"
       SSH_KEY="$HOME/.ssh/id_ed25519_nas"
       if [ ! -f "$SSH_KEY" ] && command -v ssh-keygen >/dev/null; then
@@ -229,10 +267,22 @@ if [ "${SKIP_WRITE:-0}" != 1 ]; then
           && ok "chiave creata in $SSH_KEY"
       fi
       if [ -f "$SSH_KEY.pub" ] && command -v ssh-copy-id >/dev/null; then
-        info "installo la chiave sul NAS (ti chiedera' la password una volta)"
-        ssh-copy-id -i "$SSH_KEY.pub" "$SSH_USER@$SSH_HOST" >/dev/null 2>&1 \
-          && ok "chiave installata" \
-          || warn "non installata: attiva SSH in DSM (Terminale e SNMP) e riprova."
+        info "Ora installo la chiave sul NAS. Due cose che ti chiedera':"
+        info "  - l'impronta della chiave dell'host, la prima volta: rispondi yes"
+        info "  - la password di $SSH_USER su DSM"
+        if ssh-copy-id -i "$SSH_KEY.pub" "$SSH_USER@$SSH_HOST"; then
+          ok "chiave installata"
+          if ssh -o BatchMode=yes -o ConnectTimeout=10 -i "$SSH_KEY" \
+               "$SSH_USER@$SSH_HOST" true 2>/dev/null; then
+            ok "collegamento SSH verificato"
+          else
+            warn "la chiave e' installata ma il collegamento non riesce ancora."
+          fi
+        else
+          warn "chiave non installata: attiva SSH in DSM (Pannello di controllo >"
+          warn "Terminale e SNMP) e rilancia. Il resto della skill funziona lo stesso."
+          SSH_HOST=""; SSH_USER=""; SSH_KEY=""
+        fi
       fi
     fi
   fi
