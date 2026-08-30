@@ -152,6 +152,17 @@ check "segreto 2FA malformato"      "base32"       1 -- env NAS_OTP_SECRET=xy "$
 reset_session
 check "manca NAS_URL"               "manca NAS_URL" 1 -- env NAS_URL= "$NAS" info
 
+# --- errori che non devono mai uscire come traceback --------------------
+check "timeout di lettura diagnosticato" "non ha risposto entro" 1 -- \
+  env NAS_TIMEOUT=1 "$NAS" api call SYNO.Core.Share list lento=3
+check "timeout suggerisce NAS_TIMEOUT"   "NAS_TIMEOUT=90"        1 -- \
+  env NAS_TIMEOUT=1 "$NAS" api call SYNO.Core.Share list lento=3
+if env NAS_TIMEOUT=1 "$NAS" api call SYNO.Core.Share list lento=3 2>&1 | grep -q "Traceback"; then
+  FAILED+=("un traceback Python e' arrivato all'utente"); printf 'x'
+else
+  PASS=$((PASS + 1)); printf '.'
+fi
+
 # --- uptime: DSM non lo restituisce sempre in secondi -------------------
 if python3 "$HERE/check_uptime.py" "$NAS"; then
   PASS=$((PASS + 1)); printf '.'

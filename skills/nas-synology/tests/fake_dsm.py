@@ -7,6 +7,7 @@ Credenziali attese: claude / segreta, con 2FA (qualunque codice va bene).
 Endpoint di controllo per i test, non presenti in un DSM reale:
 
     GET /__control/expire   invalida il SID corrente
+Qualunque richiesta con &lento=N ritarda la risposta di N secondi.
     GET /__control/state    restituisce lo stato interno in JSON
 
 Le risposte riproducono la forma di quelle vere, compresa la stranezza per cui
@@ -15,6 +16,7 @@ gli errori delle operazioni asincrone arrivano dentro un `success: true`.
 
 import json
 import sys
+import time
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import urlparse, parse_qs
 
@@ -82,6 +84,10 @@ def storage_info():
 
 def dispatch(query, has_body):
     api, method = query.get("api"), query.get("method")
+
+    if query.get("lento"):
+        # per verificare la diagnosi del timeout di lettura
+        time.sleep(float(query["lento"]))
 
     if api == "SYNO.API.Info":
         return ok(APIS)
@@ -194,6 +200,17 @@ class Handler(BaseHTTPRequestHandler):
     def log_message(self, *args):
         pass
 
+    def handle_error(self, *args):
+        # Quando il client molla per timeout la scrittura fallisce: e' proprio
+        # cio' che la prova sta verificando, non un errore del finto DSM.
+        pass
+
+    def _safe(self, action):
+        try:
+            action()
+        except (BrokenPipeError, ConnectionResetError):
+            pass
+
     def _send(self, payload, content_type="application/json"):
         self.send_response(200)
         self.send_header("Content-Type", content_type)
@@ -217,13 +234,13 @@ class Handler(BaseHTTPRequestHandler):
         self._send(json.dumps(dispatch(query, has_body)).encode())
 
     def do_GET(self):
-        self._handle()
+        self._safe(self._handle)
 
     def do_POST(self):
         length = int(self.headers.get("Content-Length", 0))
         if length:
             self.rfile.read(length)
-        self._handle(has_body=True)
+        self._safe(lambda: self._handle(has_body=True))
 
 
 if __name__ == "__main__":
