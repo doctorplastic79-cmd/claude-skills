@@ -12,6 +12,7 @@ riutilizzabili e non appesantiscono il codice delle applicazioni.
 | `skills/heygen-video` | genera video HeyGen con presenter, dall'idea allo script al video finito |
 | `skills/heygen-translate` | traduce e doppia un video esistente in un'altra lingua, con voice cloning e lip-sync |
 | `skills/nas-synology` | entra nel NAS Synology e lo gestisce: dischi, spazio, file, pacchetti, backup, log |
+| `skills/synology-nas-access` | legge, cerca e scarica file dal NAS Synology tramite un gateway SFTP/Tailscale in sola lettura |
 
 | Preset | A cosa serve |
 |---|---|

@@ -28,6 +28,11 @@
       "name": "nas-synology",
       "source": "./skills/nas-synology",
       "description": "Accede a un NAS Synology DSM 7 e lo gestisce: stato dischi e volumi, file, pacchetti, backup, log. Funziona da Mac (API + SSH) e da cellulare (solo API)."
+    },
+    {
+      "name": "synology-nas-access",
+      "source": "./skills/synology-nas-access",
+      "description": "Legge, cerca e scarica file dal NAS Synology dell'utente tramite un gateway SFTP/Tailscale in sola lettura."
     }
   ]
 }
