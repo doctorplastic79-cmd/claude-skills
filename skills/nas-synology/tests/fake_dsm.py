@@ -29,6 +29,8 @@ APIS = {
     "SYNO.Core.User": {"path": "entry.cgi", "minVersion": 1, "maxVersion": 1},
     "SYNO.Core.CurrentConnection": {"path": "entry.cgi", "minVersion": 1, "maxVersion": 1},
     "SYNO.Docker.Container": {"path": "entry.cgi", "minVersion": 1, "maxVersion": 1},
+    "SYNO.Core.Upgrade.Server": {"path": "entry.cgi", "minVersion": 1, "maxVersion": 1},
+    "SYNO.Core.SecurityScan.Status": {"path": "entry.cgi", "minVersion": 1, "maxVersion": 1},
     "SYNO.FileStation.List": {"path": "entry.cgi", "minVersion": 1, "maxVersion": 2},
     "SYNO.FileStation.Search": {"path": "entry.cgi", "minVersion": 1, "maxVersion": 2},
     "SYNO.FileStation.Delete": {"path": "entry.cgi", "minVersion": 1, "maxVersion": 2},
@@ -132,6 +134,23 @@ def dispatch(query, has_body):
     if api == "SYNO.Docker.Container":
         return ok({"containers": [{"name": "plex", "image": "plex:latest",
                                    "status": "running", "mem_limit": 2147483648}]})
+
+    if api == "SYNO.Core.Upgrade.Server":
+        # forma restituita da un DS220+ su DSM 7.3.2
+        return ok({"update": {
+            "available": True, "reboot": "now", "restart": "none",
+            "rss_result": "success", "type": "system", "version": "DSM 7.4.1-90080",
+            "version_details": {"buildnumber": 90080, "isSecurityVersion": False,
+                                "major": 7, "micro": 1, "minor": 4, "nano": 0,
+                                "os_name": "DSM"},
+        }})
+    if api == "SYNO.Core.SecurityScan.Status":
+        vuoto = {"danger": 0, "info": 0, "outOfDate": 0, "risk": 0, "warning": 0}
+        return ok({"items": {
+            nome: {"category": nome, "fail": dict(vuoto), "failSeverity": "safe",
+                   "progress": 100, "runningItem": "", "total": 0, "waitNum": 0}
+            for nome in ("malware", "network", "systemCheck", "update")
+        }})
 
     if api == "SYNO.FileStation.List":
         if method == "list_share":

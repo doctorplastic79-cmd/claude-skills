@@ -543,9 +543,27 @@ def human_bytes(value):
     return "-"
 
 
-def human_time(seconds):
+def human_time(value):
+    """DSM restituisce l'uptime a volte in secondi, a volte come "HH:MM:SS"
+    (con le ore che superano le 24) e a volte con i giorni scritti a parole."""
+    if value is None:
+        return "-"
+    if isinstance(value, str) and ":" in value:
+        parts = value.replace(",", " ").split()
+        days = 0
+        clock = parts[-1]
+        for i, part in enumerate(parts[:-1]):
+            if part.isdigit() and i + 1 < len(parts) and parts[i + 1].lower().startswith(("day", "giorn")):
+                days = int(part)
+        try:
+            chunks = [int(c) for c in clock.split(":")]
+        except ValueError:
+            return str(value)
+        while len(chunks) < 3:
+            chunks.append(0)
+        value = days * 86400 + chunks[0] * 3600 + chunks[1] * 60 + chunks[2]
     try:
-        seconds = int(seconds)
+        seconds = int(float(value))
     except (TypeError, ValueError):
         return "-"
     days, rem = divmod(seconds, 86400)
@@ -878,15 +896,21 @@ def cmd_health(dsm, args):
             print(f"  non disponibile: {exc}")
             report[key] = str(exc)
         print()
-    for label, key in (("Aggiornamenti DSM", "dsm-update"), ("Sicurezza", "security"),
-                       ("Backup", "backups")):
+    for label, key, renderer in (
+        ("Aggiornamenti DSM", "dsm-update", cmd_updates),
+        ("Sicurezza", "security", cmd_security),
+        ("Backup", "backups", cmd_backups),
+    ):
         print(f"--- {label} ---")
         try:
-            data = fetch(dsm, key)
-            print("  " + json.dumps(data, ensure_ascii=False)[:700])
-            report[key] = data
+            renderer(dsm, argparse.Namespace(json=False))
+            report[key] = "ok"
         except NasError as exc:
-            print("  non disponibile su questo DSM")
+            # Solo la prima riga: l'elenco delle API tentate serve a chi indaga,
+            # non a chi sta leggendo il rapporto sullo stato del NAS.
+            print(f"  non disponibile: {str(exc).splitlines()[0]}")
+            if key == "backups":
+                print("  (se Hyper Backup non e' installato e' normale: nas packages)")
             report[key] = str(exc)
         print()
     if args.json:
@@ -949,7 +973,56 @@ def cmd_packages(dsm, args):
 
 def cmd_updates(dsm, args):
     data = fetch(dsm, "dsm-update")
-    emit(args, data, lambda d: print(json.dumps(d, indent=2, ensure_ascii=False)))
+
+    def show(d):
+        upd = d.get("update") if isinstance(d.get("update"), dict) else d
+        if not upd.get("available"):
+            print("Nessun aggiornamento DSM disponibile.")
+            return
+        details = upd.get("version_details") or {}
+        print(f"Disponibile    {upd.get('version') or details.get('os_name', '?')}")
+        if details.get("isSecurityVersion"):
+            print("               aggiornamento di SICUREZZA: da fare presto")
+        reboot = upd.get("reboot")
+        if reboot and reboot != "none":
+            print(f"Riavvio        richiesto ({reboot})")
+        restart = upd.get("restart")
+        if restart and restart != "none":
+            print(f"Servizi        riavvio richiesto ({restart})")
+        print("\nL'aggiornamento si fa da DSM (Pannello di controllo > Aggiornamento")
+        print("e ripristino): da qui un aggiornamento fallito lascerebbe il NAS in uno")
+        print("stato che richiede intervento fisico.")
+
+    emit(args, data, show)
+
+
+def cmd_security(dsm, args):
+    data = fetch(dsm, "security")
+    etichette = {
+        "malware": "malware", "network": "rete", "systemCheck": "sistema",
+        "update": "aggiornamenti", "account": "account",
+    }
+
+    def show(d):
+        items = d.get("items") if isinstance(d.get("items"), dict) else d
+        rows = []
+        for key, item in sorted(items.items()):
+            if not isinstance(item, dict):
+                continue
+            fail = item.get("fail") or {}
+            gravi = sum(
+                v for k, v in fail.items()
+                if k in ("danger", "risk", "warning", "outOfDate") and isinstance(v, int)
+            )
+            rows.append([
+                etichette.get(key, key),
+                item.get("failSeverity", "-"),
+                gravi if gravi else "nessuno",
+                f"{item.get('progress', '-')}%",
+            ])
+        print(table(rows, ["controllo", "esito", "problemi", "analisi"]))
+
+    emit(args, data, show)
 
 
 def cmd_logs(dsm, args):
@@ -1212,6 +1285,7 @@ def build_parser():
     add("docker", cmd_docker, "container di Container Manager")
     add("backups", cmd_backups, "task di Hyper Backup e loro esito")
     add("updates", cmd_updates, "aggiornamenti DSM disponibili")
+    add("security", cmd_security, "esito dell'analisi di sicurezza di DSM")
     add("logs", cmd_logs, "ultime voci del registro di sistema")
     add("logout", cmd_logout, "chiude la sessione e cancella il SID salvato")
 

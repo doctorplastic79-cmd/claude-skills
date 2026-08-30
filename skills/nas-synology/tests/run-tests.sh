@@ -75,6 +75,13 @@ check "ls elenca i file"            "nota.txt"     0 -- "$NAS" ls /volume1/Drive
 check "ls senza percorso -> share"  "Drive"        0 -- "$NAS" ls
 check "find cerca ricorsivamente"   "film.mkv"     0 -- "$NAS" find "*.mkv" --path /volume1
 check "logs assente degrada bene"   "nas api list" 1 -- "$NAS" logs
+check "updates: legge la versione"  "DSM 7.4.1-90080" 0 -- "$NAS" updates
+check "updates: segnala il riavvio" "Riavvio"      0 -- "$NAS" updates
+check "updates: rimanda a DSM"      "Pannello di controllo" 0 -- "$NAS" updates
+check "security: tabella leggibile" "malware"      0 -- "$NAS" security
+check "security: esito per riga"    "safe"         0 -- "$NAS" security
+check "health non tronca il JSON"   "controllo"    0 -- "$NAS" health
+check "health non stampa JSON grezzo" "Disponibile" 0 -- "$NAS" health
 check "backups assente degrada bene" "nas api list" 1 -- "$NAS" backups
 
 # --- formato di uscita -------------------------------------------------
@@ -144,6 +151,13 @@ reset_session
 check "segreto 2FA malformato"      "base32"       1 -- env NAS_OTP_SECRET=xy "$NAS" info
 reset_session
 check "manca NAS_URL"               "manca NAS_URL" 1 -- env NAS_URL= "$NAS" info
+
+# --- uptime: DSM non lo restituisce sempre in secondi -------------------
+if python3 "$HERE/check_uptime.py" "$NAS"; then
+  PASS=$((PASS + 1)); printf '.'
+else
+  FAILED+=("uptime: una delle forme restituite da DSM non viene formattata"); printf 'x'
+fi
 
 # --- TLS ---------------------------------------------------------------
 # Un DSM appena installato ha un certificato autofirmato: il client deve
