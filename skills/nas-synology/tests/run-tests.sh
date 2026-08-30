@@ -155,6 +155,24 @@ check "segreto 2FA malformato"      "base32"       1 -- env NAS_OTP_SECRET=xy "$
 reset_session
 check "manca NAS_URL"               "manca NAS_URL" 1 -- env NAS_URL= "$NAS" info
 
+SETUP="$HERE/../scripts/nas-setup.sh"
+
+# --- verso quali host si puo' configurare SSH --------------------------
+# Una chiave privata mandata all'host sbagliato non si richiama indietro.
+. "$HERE/../scripts/lib-host.sh"
+locali="192.168.1.10 10.0.0.5 172.16.3.4 127.0.0.1 diskstation.local
+        100.73.172.85 100.64.0.1 100.127.255.254 nas.coda-panda.ts.net"
+non_locali="informamedica-nas.fr3.quickconnect.to casa.synology.me 8.8.8.8
+            example.com 172.15.0.1 172.32.0.1 100.63.0.1 100.128.0.1"
+host_ko=""
+for h in $locali;     do is_local_host "$h" || host_ko="$host_ko $h(atteso locale)"; done
+for h in $non_locali; do is_local_host "$h" && host_ko="$host_ko $h(atteso NON locale)"; done
+if [ -z "$host_ko" ]; then
+  PASS=$((PASS + 1)); printf '.'
+else
+  FAILED+=("classificazione host sbagliata per:$host_ko"); printf 'x'
+fi
+
 # --- errori che non devono mai uscire come traceback --------------------
 check "timeout di lettura diagnosticato" "non ha risposto entro" 1 -- \
   env NAS_TIMEOUT=1 "$NAS" api call SYNO.Core.Share list lento=3
@@ -192,6 +210,19 @@ if command -v openssl >/dev/null; then
     env NAS_URL="https://127.0.0.1:$TLS_PORT" NAS_CACHE_DIR="$WORK/tls" "$NAS" info
   check "TLS: --insecure permette comunque di leggere" "DS923+" 0 -- \
     env NAS_URL="https://127.0.0.1:$TLS_PORT" NAS_CACHE_DIR="$WORK/tls2" "$NAS" info --insecure
+  # Il caso di Dario: DSM autofirmato su un indirizzo raggiungibile solo dalla
+  # rete locale o da Tailscale. Il setup deve proporre il rimedio e concludere,
+  # non fermarsi su un errore di certificato.
+  check "setup risolve il certificato autofirmato" "Pronto" 0 -- \
+    env NAS_URL="https://127.0.0.1:$TLS_PORT" NAS_CONFIG="$WORK/tls-setup.env" \
+    NAS_CACHE_DIR="$WORK/tls3" "$SETUP" \
+    --non-interattivo --salta-collaudo --salta-installazione
+  if grep -q '^NAS_VERIFY_TLS=no$' "$WORK/tls-setup.env" 2>/dev/null &&
+     ! grep -q '^# Togli il commento' "$WORK/tls-setup.env"; then
+    PASS=$((PASS + 1)); printf '.'
+  else
+    FAILED+=("setup: NAS_VERIFY_TLS non scritto correttamente per l'host locale"); printf 'x'
+  fi
   kill "$TLS_PID" 2>/dev/null
 else
   echo -n " (prove TLS saltate: openssl assente)"
@@ -207,7 +238,6 @@ fi
 # --- lo script di configurazione ---------------------------------------
 # Sempre con --salta-installazione e --salta-collaudo: qui interessa la sua
 # logica, non che reinstalli la skill o rilanci ricorsivamente queste prove.
-SETUP="$HERE/../scripts/nas-setup.sh"
 check "setup: --help descrive le opzioni" "--non-interattivo" 0 -- "$SETUP" --help
 check "setup: opzione ignota rifiutata"   "opzione sconosciuta" 1 -- "$SETUP" --inventata
 check "setup: senza NAS_URL lo dice"      "serve NAS_URL" 1 -- \

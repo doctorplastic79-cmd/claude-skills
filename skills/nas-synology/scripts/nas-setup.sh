@@ -217,20 +217,10 @@ if [ "${SKIP_WRITE:-0}" != 1 ]; then
     ask "Segreto 2FA base32 (invio per saltare)" OTP ""
   fi
 
-  # L'host SSH non si deduce da quello web. Un indirizzo QuickConnect e' un
-  # relay di Synology, un DDNS e' il tuo indirizzo pubblico: in un caso la
-  # chiave finirebbe su una macchina di terzi, nell'altro si tenterebbe la
-  # porta 22 di casa, che non deve essere aperta. SSH ha senso solo verso
-  # l'indirizzo del NAS sulla rete locale o in VPN.
-  is_local_host() {
-    case "$1" in
-      *.quickconnect.to|*.quickconnect.cn) return 1 ;;
-      *.local|localhost|127.*)             return 0 ;;
-      10.*|192.168.*)                      return 0 ;;
-      172.1[6-9].*|172.2[0-9].*|172.3[01].*) return 0 ;;
-      *)                                   return 1 ;;
-    esac
-  }
+  # L'host SSH non si deduce da quello web: la classificazione sta in
+  # lib-host.sh, condivisa con le prove perche' sbagliarla significa
+  # mandare una chiave privata dove non deve andare.
+  . "$HERE/lib-host.sh"
 
   SSH_HOST=""; SSH_USER=""; SSH_KEY=""
   if [ "$INTERACTIVE" = 1 ] && command -v ssh >/dev/null; then
@@ -311,6 +301,38 @@ fi
 
 # --------------------------------------------------------------- 6. verifica
 step "Verifica sul NAS"
+
+# Su LAN o Tailscale il certificato autofirmato di DSM non e' verificabile, ed
+# e' il caso normale, non un'anomalia: il canale e' gia' protetto dalla rete
+# locale o dal tunnel. Invece di fermarsi con un errore di certificato, lo
+# script propone il rimedio e lo scrive, ma solo per host di quel tipo: su un
+# indirizzo pubblico disattivare la verifica sarebbe un consiglio pessimo.
+VERIFICA="$("$NAS" check 2>&1)"
+if [ $? -ne 0 ] && grep -q "certificato TLS non verificabile" <<<"$VERIFICA"; then
+  HOSTVER="${FOUND#*://}"; HOSTVER="${HOSTVER%%:*}"
+  if is_local_host "$HOSTVER"; then
+    info "Il NAS ha il certificato autofirmato di DSM, che nessun client puo'"
+    info "verificare. Su $HOSTVER il canale e' comunque protetto (rete locale o"
+    info "tunnel Tailscale), quindi la verifica del certificato si puo' togliere."
+    if [ "$INTERACTIVE" = 0 ] || confirm "Aggiungo NAS_VERIFY_TLS=no alla configurazione?"; then
+      # Via anche le due righe di commento che spiegavano come attivarla:
+      # lasciarle sopra alla riga attiva le farebbe leggere come una smentita.
+      sed -i.bak -e '/^# Togli il commento/d' -e '/^# e lo raggiungi/d' \
+        -e '/^# *NAS_VERIFY_TLS=/d' -e '/^NAS_VERIFY_TLS=/d' "$CONFIG"
+      rm -f "$CONFIG.bak"
+      {
+        echo "# Verifica del certificato disattivata: host raggiungibile solo"
+        echo "# dalla rete locale o da Tailscale, dove il canale e' gia' protetto."
+        echo "NAS_VERIFY_TLS=no"
+      } >> "$CONFIG"
+      chmod 600 "$CONFIG"
+      ok "verifica del certificato disattivata per questo NAS"
+      info "Per riattivarla: installa un certificato Let's Encrypt in DSM e togli"
+      info "la riga NAS_VERIFY_TLS=no da $CONFIG."
+    fi
+  fi
+fi
+
 if "$NAS" check; then
   echo
   echo "Pronto. Lo stato completo del NAS:"
