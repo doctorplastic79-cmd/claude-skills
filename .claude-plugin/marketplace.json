@@ -25,6 +25,11 @@
       "description": "Traduce e doppia un video in un'altra lingua con voice cloning e lip-sync, via HeyGen Video Translation."
     },
     {
+      "name": "nas-synology",
+      "source": "./skills/nas-synology",
+      "description": "Accede a un NAS Synology DSM 7 e lo gestisce: stato dischi e volumi, file, pacchetti, backup, log. Funziona da Mac (API + SSH) e da cellulare (solo API)."
+    },
+    {
       "name": "synology-nas-access",
       "source": "./skills/synology-nas-access",
       "description": "Accesso in sola lettura al NAS Synology tramite gateway SFTP su Tailscale: esplora, cerca, legge e scarica file."
