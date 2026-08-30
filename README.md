@@ -153,11 +153,19 @@ Scrive `~/.config/nas-synology/config.env` con permessi `600` e verifica il
 collegamento. Le credenziali stanno li' o nelle variabili d'ambiente, mai in
 questo repository.
 
-Perche' funzioni **anche dal cellulare** servono due cose: il NAS raggiungibile
-su Internet via HTTPS (DDNS Synology + certificato Let's Encrypt) e le variabili
-`NAS_URL`, `NAS_USER`, `NAS_PASS`, `NAS_OTP_SECRET` impostate nelle variabili
-d'ambiente del cloud environment, con il dominio del NAS ammesso dalla network
-policy. Dal Mac in LAN si aggiunge il trasporto SSH, che apre la shell di DSM.
+Perche' funzioni **anche dal cellulare** servono tre cose: la skill caricata
+sull'account claude.ai, il NAS raggiungibile su Internet via HTTPS (DDNS
+Synology + certificato Let's Encrypt) e le variabili `NAS_URL`, `NAS_USER`,
+`NAS_PASS`, `NAS_OTP_SECRET` impostate nelle variabili d'ambiente del cloud
+environment, con il dominio del NAS ammesso dalla network policy. La skill pesa
+80 KB, quindi si carica intera, senza il loader che serve a `video-shotcraft`:
+
+```bash
+./package-for-claude-ai.sh nas-synology
+```
+
+e poi *Impostazioni > Capacita' > Skill > Carica skill* su claude.ai. Dal Mac in
+LAN si aggiunge il trasporto SSH, che apre la shell di DSM.
 
 Le operazioni che modificano il NAS richiedono il flag `--yes`; formattazioni,
 RAID, rete, account e spegnimento restano fuori dalla portata della skill e
