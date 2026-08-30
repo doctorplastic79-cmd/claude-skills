@@ -1,0 +1,40 @@
+Port 2222
+Protocol 2
+AddressFamily any
+ListenAddress 0.0.0.0
+
+HostKey /state/ssh_host_ed25519_key
+AuthorizedKeysFile /run/authorized_keys/%u
+
+PubkeyAuthentication yes
+AuthenticationMethods publickey
+PasswordAuthentication no
+KbdInteractiveAuthentication no
+ChallengeResponseAuthentication no
+PermitEmptyPasswords no
+PermitRootLogin no
+AllowUsers nasreader
+StrictModes yes
+UsePAM no
+
+ChrootDirectory /srv/sftp
+ForceCommand internal-sftp -R -d /nas
+Subsystem sftp internal-sftp
+
+AllowTcpForwarding no
+AllowAgentForwarding no
+DisableForwarding yes
+X11Forwarding no
+PermitTunnel no
+GatewayPorts no
+PermitOpen none
+PermitTTY no
+PermitUserEnvironment no
+
+ClientAliveInterval 30
+ClientAliveCountMax 2
+LoginGraceTime 20
+MaxAuthTries 3
+MaxSessions 4
+MaxStartups 3:30:6
+LogLevel VERBOSE

@@ -1,0 +1,49 @@
+services:
+  gateway:
+    build:
+      context: .
+      args:
+        NAS_UID: ${NAS_UID:?Set NAS_UID}
+        NAS_GID: ${NAS_GID:?Set NAS_GID}
+    container_name: claude-nas-read
+    restart: unless-stopped
+    read_only: true
+    ports:
+      - "${TAILSCALE_IP:?Set TAILSCALE_IP}:${GATEWAY_PORT:-2222}:2222"
+    volumes:
+      - type: bind
+        source: ${NAS_SOURCE_PATH:?Set NAS_SOURCE_PATH}
+        target: /srv/sftp/nas
+        read_only: true
+      - type: bind
+        source: ${PUBLIC_KEY_FILE:?Set PUBLIC_KEY_FILE}
+        target: /bootstrap/claude.pub
+        read_only: true
+      - type: bind
+        source: ./state
+        target: /state
+    tmpfs:
+      - /run:size=16m,mode=0755
+      - /tmp:size=16m,mode=1777
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - SETGID
+      - SETUID
+      - SYS_CHROOT
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 64
+    mem_limit: 128m
+    healthcheck:
+      test: ["CMD", "/usr/sbin/sshd", "-t", "-f", "/etc/ssh/sshd_config"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    networks:
+      - isolated
+
+networks:
+  isolated:
+    internal: true

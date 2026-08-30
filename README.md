@@ -11,6 +11,7 @@ riutilizzabili e non appesantiscono il codice delle applicazioni.
 | `skills/heygen-avatar` | crea un avatar HeyGen persistente (volto + voce) per l'agente, l'utente o un personaggio |
 | `skills/heygen-video` | genera video HeyGen con presenter, dall'idea allo script al video finito |
 | `skills/heygen-translate` | traduce e doppia un video esistente in un'altra lingua, con voice cloning e lip-sync |
+| `skills/synology-nas-access` | legge, cerca e scarica file dal NAS Synology tramite un gateway SFTP/Tailscale in sola lettura |
 
 | Preset | A cosa serve |
 |---|---|
