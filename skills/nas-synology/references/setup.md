@@ -100,9 +100,28 @@ Serve per l'uso da cellulare. Tre strade, dalla migliore alla peggiore:
 Con un certificato valido la verifica TLS funziona e `NAS_VERIFY_TLS=no` non
 serve mai.
 
-**b. VPN o Tailscale.** Piu' sicuro (niente porte aperte) ma il NAS resta
-invisibile alle sessioni cloud: dal cellulare non funzionerebbe. Buona scelta se
-ti basta usare la skill dal Mac.
+**b. Tailscale o un'altra VPN mesh.** *Dal Mac e' la strada migliore*, meglio
+anche della (a): non apre nessuna porta sul router, la connessione e' diretta e
+cifrata invece di passare da un relay, e **SSH funziona**, cosa impossibile con
+QuickConnect. Installa il pacchetto Tailscale sul NAS dal Centro pacchetti e usa
+l'indirizzo `100.x.y.z` che ti assegna:
+
+```
+NAS_URL=https://100.73.172.85:5001
+NAS_SSH_HOST=100.73.172.85
+NAS_VERIFY_TLS=no
+```
+
+`NAS_VERIFY_TLS=no` qui non e' una rinuncia: il certificato autofirmato di DSM
+non e' verificabile per un indirizzo IP, e l'autenticazione del peer la fa gia'
+Tailscale, che e' una garanzia piu' forte. Su un indirizzo pubblico, invece, la
+stessa riga sarebbe un errore grave. Se vuoi comunque la verifica, Tailscale sa
+emettere un certificato valido per il nome MagicDNS (`tailscale cert`), da
+installare poi in DSM.
+
+L'unico limite: il NAS resta invisibile alle sessioni cloud, quindi **dal
+cellulare Tailscale da solo non basta**. Le due strade convivono senza problemi:
+Tailscale dal Mac, QuickConnect o DDNS dal telefono.
 
 **c. QuickConnect.** Comodo per le app Synology. L'API web spesso risponde
 anche attraverso il relay, quindi come `NAS_URL` puo' funzionare, ma con due
