@@ -35,8 +35,14 @@ Tienila attiva. In fase di attivazione DSM mostra un QR code e, sotto, una
   `NAS_OTP_CODE=123456`
 
 Al primo accesso con OTP il NAS rilascia un *device token* che il client salva
-in `~/.cache/nas-synology/session.json`: dai login successivi il codice non
-serve piu'. Se cancelli quel file, il segreto (o un codice) torna necessario.
+in `~/.cache/nas-synology/session.json` e usa per tutti i login successivi:
+DSM vede **un** dispositivo attendibile ("claude-nas-skill"), non uno per ogni
+comando. Il codice torna necessario solo se DSM rifiuta il token, o se cancelli
+quel file.
+
+Con la password sbagliata il client fa **un** tentativo e poi si ferma per
+tutta la durata del comando: sei tentativi di fila farebbero scattare l'Auto
+Block di DSM, che blocca l'IP anche con la password giusta.
 
 Conservare il segreto 2FA accanto alla password indebolisce la seconda barriera:
 chi legge il file ha entrambi i fattori. Va bene per un accesso automatico, ma
@@ -69,15 +75,16 @@ chmod 600 ~/.config/nas-synology/config.env
 
 | Variabile | Serve a |
 |---|---|
-| `NAS_URL` | indirizzo completo, con schema e porta (`https://host:5001`) |
+| `NAS_URL` | uno o piu' indirizzi completi, separati da virgola, in ordine di preferenza: `https://192.168.10.139:5001,https://100.73.172.85:5001,https://<id>.quickconnect.to`. Risponde il primo raggiungibile; l'ultimo che ha risposto viene ricordato e provato per primo la volta dopo |
+| `NAS_AMBIENTE` | forza il rilevamento dell'ambiente (`mac`, `cloud`, `altro`), per i casi che il riconoscimento automatico non prevede |
 | `NAS_USER`, `NAS_PASS` | credenziali DSM |
 | `NAS_OTP_SECRET` | segreto base32 della 2FA; il client calcola il codice |
 | `NAS_OTP_CODE` | codice 2FA gia' pronto, per un singolo comando |
-| `NAS_VERIFY_TLS` | `no` disattiva la verifica del certificato: solo su LAN |
+| `NAS_VERIFY_TLS` | `no` disattiva la verifica del certificato **solo per gli indirizzi locali o Tailscale**; un indirizzo pubblico nella stessa lista resta sempre verificato |
 | `NAS_CA_BUNDLE` | file PEM con il certificato del NAS, alternativa pulita a `NAS_VERIFY_TLS=no` |
 | `NAS_READONLY` | `1` blocca ogni scrittura, anche con `--yes` |
 | `NAS_SSH_HOST`, `NAS_SSH_USER`, `NAS_SSH_PORT`, `NAS_SSH_KEY` | trasporto SSH |
-| `NAS_TIMEOUT` | secondi di attesa per richiesta (default 30). Alzalo a 90 se il NAS e' sotto carico o lo raggiungi da un relay QuickConnect: la richiesta parte, ma la risposta arriva tardi |
+| `NAS_TIMEOUT` | secondi di attesa per richiesta (default 30; **90 da solo** quando l'indirizzo scelto e' un relay QuickConnect). Alzalo se il NAS e' sotto carico: la richiesta parte, ma la risposta arriva tardi |
 | `NAS_UPLOAD_LIMIT_MB` | tetto per l'upload via API (default 256) |
 | `NAS_CONFIG`, `NAS_CACHE_DIR` | percorsi alternativi di config e cache |
 
@@ -123,8 +130,10 @@ L'unico limite: il NAS resta invisibile alle sessioni cloud, quindi **dal
 cellulare Tailscale da solo non basta**. Le due strade convivono senza problemi:
 Tailscale dal Mac, QuickConnect o DDNS dal telefono.
 
-**c. QuickConnect.** Comodo per le app Synology. L'API web spesso risponde
-anche attraverso il relay, quindi come `NAS_URL` puo' funzionare, ma con due
+**c. QuickConnect.** Comodo per le app Synology, e **l'unica strada che
+funziona dalle sessioni cloud** senza aprire porte: l'API web risponde
+attraverso il relay (verificato: 872 API esposte). Va messo in `NAS_URL` dopo
+LAN e Tailscale, cosi' viene usato solo quando gli altri non rispondono. Due
 avvertenze che contano:
 
 - **SSH non passa da QuickConnect.** Il relay inoltra il traffico web di DSM,
@@ -160,24 +169,58 @@ specifico, non un `NOPASSWD: ALL`.
 
 ## 6. Uso dal cellulare (sessioni cloud)
 
-Le sessioni aperte da telefono girano in un container in cloud: non vedono ne'
-il tuo Mac ne' la tua LAN, e non ereditano `~/.config`. Perche' la skill
-funzioni li' servono due cose:
+Le sessioni aperte da telefono o dal web (claude.ai/code) girano in un
+container in cloud: non vedono ne' il tuo Mac ne' la tua LAN ne' Tailscale, e
+non ereditano `~/.config`. **Verificato da un container reale**: senza le tre
+cose qui sotto, il proxy di uscita risponde `403` alla connessione verso il NAS
+e la skill non puo' fare nulla.
 
-1. **Le variabili nell'ambiente cloud.** Nelle impostazioni del cloud
-   environment (claude.ai/code), campo variabili d'ambiente: `NAS_URL`,
-   `NAS_USER`, `NAS_PASS`, `NAS_OTP_SECRET`. Restano dentro l'ambiente, non nel
-   repository.
-2. **Il dominio del NAS ammesso dalla network policy** dell'ambiente. Il traffico
-   in uscita passa da un proxy che blocca i domini non previsti: se
-   `qualcosa.synology.me` non e' ammesso, ogni chiamata fallisce con "impossibile
-   raggiungere". E' una impostazione dell'environment, non qualcosa che la skill
-   possa aggirare.
+Tutto quello che serve lo stampa, gia' compilato dalla configurazione del Mac
+e senza la password:
+
+```bash
+scripts/nas cloud
+```
+
+1. **Il dominio del NAS nella network policy** dell'environment: su
+   claude.ai/code, impostazioni dell'environment, sezione Network, aggiungi
+   `<id>.<regione>.quickconnect.to` (o il tuo DDNS). Il traffico in uscita passa
+   da un proxy con allowlist: un dominio non elencato e' rifiutato, e la skill
+   te lo dice con quel nome esatto invece di un generico "non raggiungibile".
+2. **Le variabili nell'environment**: `NAS_URL` (solo gli indirizzi pubblici),
+   `NAS_USER`, `NAS_PASS`, `NAS_OTP_SECRET` se attiva, `NAS_TIMEOUT=90` perche'
+   QuickConnect e' un relay lento. Restano nell'environment, mai nel repository.
+3. **La skill**: caricata sull'account (Impostazioni > Capacita' > Skill, lo
+   zip di `./package-for-claude-ai.sh nas-synology`) oppure installata dal
+   Setup script dell'environment, come nel README.
 
 Da cellulare SSH non c'e': funzionano solo i comandi basati su API. Tutto cio'
-che richiede la shell va rimandato a quando sei al Mac.
+che richiede la shell va rimandato a quando sei al Mac. Il client se ne accorge
+da solo (`Ambiente cloud` in `check`) e non prova nemmeno LAN e Tailscale.
 
-## 7. Controllo finale
+Una cosa da sapere sul certificato, nel cloud: il proxy di uscita del container
+termina il TLS e lo rifa' con un certificato suo, che il container considera
+valido. Quindi li' `NAS_VERIFY_TLS` e `NAS_CA_BUNDLE` riguardano il tratto
+fino al proxy, non il certificato del NAS; e' il proxy a verificare quello. In
+pratica: nel cloud non servono, e un errore di certificato che compare li'
+non parla del NAS.
+
+## 7. La configurazione consigliata, tutta insieme
+
+Un solo `NAS_URL` con i tre indirizzi, e la stessa riga vale ovunque:
+
+```
+NAS_URL=https://192.168.10.139:5001,https://100.73.172.85:5001,https://<id>.<regione>.quickconnect.to
+NAS_SSH_HOST=100.73.172.85
+NAS_VERIFY_TLS=no
+NAS_TIMEOUT=90
+```
+
+In casa risponde la LAN (veloce, SSH), fuori casa Tailscale (SSH), e nel cloud
+solo QuickConnect: il client sceglie da solo. `NAS_VERIFY_TLS=no` toglie la
+verifica del certificato ai primi due, che sono locali, e non tocca il terzo.
+
+## 8. Controllo finale
 
 ```bash
 scripts/nas check

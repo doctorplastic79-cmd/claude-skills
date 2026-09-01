@@ -45,7 +45,8 @@ APIS = {
 }
 
 SID = "sid-di-prova"
-STATE = {"logins": 0, "valid": True, "deleted": [], "uploaded": [], "moved": []}
+STATE = {"logins": 0, "login_rifiutati": 0, "login_con_device": 0, "login_con_otp": 0,
+         "valid": True, "deleted": [], "uploaded": [], "moved": []}
 
 
 def ok(data):
@@ -97,9 +98,14 @@ def dispatch(query, has_body):
             STATE["valid"] = False
             return ok({})
         if query.get("account") != "claude" or query.get("passwd") != "segreta":
+            STATE["login_rifiutati"] += 1
             return err(400)
         if not query.get("otp_code") and not query.get("device_id"):
             return err(403)          # 2FA obbligatoria, come su un DSM moderno
+        if query.get("device_id"):
+            STATE["login_con_device"] += 1
+        else:
+            STATE["login_con_otp"] += 1
         STATE["logins"] += 1
         STATE["valid"] = True
         return ok({"sid": SID, "synotoken": "token-di-prova", "did": "device-1"})
@@ -223,15 +229,25 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(payload)
 
-    def _handle(self, has_body=False):
+    def _handle(self, has_body=False, extra=None):
         parsed = urlparse(self.path)
         query = {k: v[0] for k, v in parse_qs(parsed.query).items()}
+        if extra:
+            query.update(extra)
+        if query.get("api") == "SYNO.API.Auth" and query.get("method") == "login" and not extra:
+            STATE["ultimo_login_metodo"] = "GET"
 
         if parsed.path == "/__control/expire":
             STATE["valid"] = False
             return self._send(b'{"expired": true}')
         if parsed.path == "/__control/state":
             return self._send(json.dumps(STATE).encode())
+        if parsed.path == "/__control/rinomina-share":
+            # Simula un aggiornamento DSM che rinomina un'API: SYNO.Core.Share
+            # sparisce dal catalogo. Il client con il catalogo in cache deve
+            # accorgersene e ripiegare sull'alternativa.
+            APIS.pop("SYNO.Core.Share", None)
+            return self._send(b'{"rinominata": true}')
 
         if query.get("api") == "SYNO.FileStation.Download" and STATE["valid"]:
             return self._send(b"contenuto del file\n", "application/octet-stream")
@@ -243,8 +259,14 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         length = int(self.headers.get("Content-Length", 0))
-        if length:
-            self.rfile.read(length)
+        corpo = self.rfile.read(length) if length else b""
+        # Il login vero arriva in POST con le credenziali nel corpo: i campi
+        # del form valgono come quelli della query string.
+        if "application/x-www-form-urlencoded" in self.headers.get("Content-Type", ""):
+            campi = {k: v[0] for k, v in parse_qs(corpo.decode("utf-8")).items()}
+            STATE["ultimo_login_metodo"] = "POST" if campi.get("api") == "SYNO.API.Auth" else STATE.get("ultimo_login_metodo")
+            self._safe(lambda: self._handle(has_body=True, extra=campi))
+            return
         self._safe(lambda: self._handle(has_body=True))
 
 

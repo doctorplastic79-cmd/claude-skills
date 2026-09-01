@@ -27,6 +27,11 @@ is_local_host() {
     # Nomi MagicDNS di Tailscale.
     *.ts.net)                                             return 0 ;;
 
+    # Un nome senza punti ("nas", "diskstation") si risolve solo in LAN,
+    # via mDNS o /etc/hosts: e' locale per costruzione.
+    *.*|*:*)                                              return 1 ;;
+    ?*)                                                   return 0 ;;
+
     *)                                                    return 1 ;;
   esac
 }

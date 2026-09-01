@@ -40,6 +40,21 @@ for arg in "$@"; do
   esac
 done
 
+# La classificazione degli host (LAN, Tailscale, QuickConnect...) sta in
+# lib-host.sh, condivisa con le prove: serve al passo 5 per SSH e al passo 6
+# per il certificato, quindi va caricata qui e non dentro un ramo.
+. "$HERE/lib-host.sh"
+
+# Sessione cloud? NAS_AMBIENTE la forza (per le prove e i casi imprevisti),
+# altrimenti si guardano i marcatori del container.
+in_cloud() {
+  case "${NAS_AMBIENTE:-}" in
+    cloud) return 0 ;;
+    mac|altro) return 1 ;;
+  esac
+  [ "${CLAUDE_CODE_REMOTE:-}" = "true" ] || [ -d /root/.ccr ]
+}
+
 STEP=0
 step()  { STEP=$((STEP + 1)); printf '\n[%d/6] %s\n' "$STEP" "$1"; }
 ok()    { printf '  ok    %s\n' "$1"; }
@@ -60,6 +75,24 @@ confirm() {  # confirm <domanda> -> 0 se si'
   local reply; read -rp "$1 [s/N] " reply
   [[ "$reply" =~ ^[sSyY]$ ]]
 }
+
+if [ "$INTERACTIVE" = 1 ] && [ ! -t 0 ]; then
+  if [ -n "${NAS_URL:-}" ] && [ -n "${NAS_USER:-}" ] && [ -n "${NAS_PASS:-}" ]; then
+    INTERACTIVE=0   # niente terminale ma c'e' tutto: si procede senza domande
+  else
+    cat >&2 <<'EOF'
+nas-setup.sh fa delle domande (indirizzo, utente, password) e qui non c'e' un
+terminale a cui farle: sta girando dentro uno strumento, non in una shell.
+
+Due strade:
+  - lancialo tu, dal Terminale del Mac:
+      skills/nas-synology/scripts/nas-setup.sh
+  - oppure passagli tutto dall'ambiente, e non chiedera' niente:
+      NAS_URL=... NAS_USER=... NAS_PASS=... nas-setup.sh --non-interattivo
+EOF
+    exit 2
+  fi
+fi
 
 echo "Configurazione dell'accesso di Claude al NAS Synology."
 
@@ -126,7 +159,11 @@ probe_host() {  # probe_host <host> -> stampa l'URL che funziona
 FOUND=""
 if [ -n "${NAS_URL:-}" ]; then
   info "provo NAS_URL dall'ambiente..."
-  probe "${NAS_URL%/}" && FOUND="${NAS_URL%/}"
+  for candidato in $(echo "$NAS_URL" | tr ',' ' '); do
+    candidato="${candidato%/}"
+    [[ "$candidato" == *://* ]] || candidato="https://$candidato"
+    probe "$candidato" && { FOUND="$candidato"; break; }
+  done
 fi
 
 if [ -z "$FOUND" ] && [ -f "$CONFIG" ] && [ "$FORCE" = 0 ]; then
@@ -137,11 +174,16 @@ if [ -z "$FOUND" ] && [ -f "$CONFIG" ] && [ "$FORCE" = 0 ]; then
   fi
 fi
 
-if [ -z "$FOUND" ]; then
+if [ -z "$FOUND" ] && ! in_cloud; then
   info "cerco un DiskStation ai nomi soliti..."
   for host in diskstation.local nas.local synology.local diskstation nas; do
     FOUND="$(probe_host "$host")" && break || FOUND=""
   done
+  if [ -n "$FOUND" ] && [ "$INTERACTIVE" = 1 ]; then
+    # Le credenziali verranno mandate a QUESTO indirizzo al passo 6: meglio
+    # una conferma che scoprire dopo che rispondeva un altro dispositivo.
+    confirm "Trovato un DSM su $FOUND. E' il tuo NAS?" || FOUND=""
+  fi
 fi
 
 if [ -z "$FOUND" ] && [ "$ALLOW_SCAN" = 1 ]; then
@@ -157,7 +199,7 @@ finally:
     s.close()
 PY
 )"
-  if [ -n "$SUBNET" ] && confirm "Non l'ho trovato. Scansiono la rete $SUBNET.0/24 sulla porta 5001?"; then
+  if [ -n "$SUBNET" ] && confirm "Non l'ho trovato. Sei sulla rete di casa? Scansiono $SUBNET.0/24 sulla porta 5001 (non farlo su una rete che non e' tua)"; then
     info "scansione in corso, una decina di secondi..."
     TMP="$(mktemp -d)"
     for i in $(seq 1 254); do
@@ -178,8 +220,9 @@ elif [ "$INTERACTIVE" = 0 ]; then
   # Senza nessuno a cui chiedere, NAS_URL e' l'unica fonte possibile. Se non
   # risponde lo diciamo, ma proseguiamo: il passo 6 fara' la diagnosi vera.
   [ -n "${NAS_URL:-}" ] || fail "in modalita' non interattiva serve NAS_URL nell'ambiente."
-  FOUND="${NAS_URL%/}"
-  warn "a $FOUND non risponde un DSM; proseguo e lascio la diagnosi alla verifica finale."
+  FOUND="$(echo "$NAS_URL" | tr ',' ' ' | awk '{print $1}')"; FOUND="${FOUND%/}"
+  [[ "$FOUND" == *://* ]] || FOUND="https://$FOUND"
+  warn "nessun indirizzo di NAS_URL risponde da qui; proseguo e lascio la diagnosi alla verifica finale."
 else
   warn "non l'ho trovato da solo."
   info "Se sei fuori casa serve l'indirizzo pubblico (DDNS), non l'IP locale."
@@ -202,6 +245,14 @@ if [ -f "$CONFIG" ] && [ "$FORCE" = 0 ] && [ "$INTERACTIVE" = 1 ]; then
     info "configurazione lasciata com'e'"; SKIP_WRITE=1; }
 fi
 
+if [ "${SKIP_WRITE:-0}" != 1 ] && [ "$INTERACTIVE" = 0 ] && in_cloud; then
+  # Container cloud: le variabili arrivano dall'environment e ci restano.
+  # Copiarle in un file su disco effimero non serve a niente e lascia in
+  # giro una password in piu'.
+  info "sessione cloud: le variabili dell'environment bastano, niente file"
+  SKIP_WRITE=1
+fi
+
 if [ "${SKIP_WRITE:-0}" != 1 ]; then
   if [ "$INTERACTIVE" = 0 ]; then
     USER_NAME="${NAS_USER:-}"; PASS="${NAS_PASS:-}"; OTP="${NAS_OTP_SECRET:-}"
@@ -214,13 +265,8 @@ if [ "${SKIP_WRITE:-0}" != 1 ]; then
     read -rsp "  Password: " PASS; echo
     [ -n "$PASS" ] || fail "serve una password."
     info "Il segreto 2FA e' la stringa base32 sotto il QR code di DSM."
-    ask "Segreto 2FA base32 (invio per saltare)" OTP ""
+    read -rsp "  Segreto 2FA base32 (invio per saltare): " OTP; echo
   fi
-
-  # L'host SSH non si deduce da quello web: la classificazione sta in
-  # lib-host.sh, condivisa con le prove perche' sbagliarla significa
-  # mandare una chiave privata dove non deve andare.
-  . "$HERE/lib-host.sh"
 
   SSH_HOST=""; SSH_USER=""; SSH_KEY=""
   if [ "$INTERACTIVE" = 1 ] && command -v ssh >/dev/null; then
@@ -253,8 +299,13 @@ if [ "${SKIP_WRITE:-0}" != 1 ]; then
       ask "Utente SSH" SSH_USER "$USER_NAME"
       SSH_KEY="$HOME/.ssh/id_ed25519_nas"
       if [ ! -f "$SSH_KEY" ] && command -v ssh-keygen >/dev/null; then
-        ssh-keygen -t ed25519 -f "$SSH_KEY" -N "" -C "claude-nas" >/dev/null 2>&1 \
-          && ok "chiave creata in $SSH_KEY"
+        mkdir -p "$HOME/.ssh" && chmod 700 "$HOME/.ssh"
+        if ssh-keygen -t ed25519 -f "$SSH_KEY" -N "" -C "claude-nas" >/dev/null 2>&1; then
+          ok "chiave creata in $SSH_KEY"
+        else
+          warn "non sono riuscito a creare la chiave in $SSH_KEY; salto SSH."
+          SSH_HOST=""; SSH_USER=""; SSH_KEY=""
+        fi
       fi
       if [ -f "$SSH_KEY.pub" ] && command -v ssh-copy-id >/dev/null; then
         info "Ora installo la chiave sul NAS. Due cose che ti chiedera':"
@@ -277,12 +328,36 @@ if [ "${SKIP_WRITE:-0}" != 1 ]; then
     fi
   fi
 
+  # Un solo file per tutte le situazioni: in casa risponde la LAN, fuori
+  # Tailscale, nel cloud QuickConnect. Il client prova in ordine e tiene il
+  # primo che risponde, quindi qui si raccolgono tutti gli indirizzi noti.
+  INDIRIZZI="$FOUND"
+  for extra in $(echo "${NAS_URL:-}" | tr ',' ' '); do
+    extra="${extra%/}"; [ -n "$extra" ] || continue
+    [[ "$extra" == *://* ]] || extra="https://$extra"
+    case " $INDIRIZZI " in *" $extra "*) ;; *) INDIRIZZI="$INDIRIZZI $extra" ;; esac
+  done
+  if [ "$INTERACTIVE" = 1 ]; then
+    info "Se il NAS ha altri indirizzi (Tailscale 100.x.y.z, QuickConnect, DDNS),"
+    info "mettili qui separati da spazio: la stessa configurazione varra' anche"
+    info "fuori casa e nel cloud. Invio per saltare."
+    ask "Altri indirizzi" ALTRI ""
+    for extra in $ALTRI; do
+      extra="${extra%/}"
+      [[ "$extra" == *://* ]] || extra="https://$extra"
+      case " $INDIRIZZI " in *" $extra "*) ;; *) INDIRIZZI="$INDIRIZZI $extra" ;; esac
+    done
+  fi
+  NAS_URL_RIGA="$(echo "$INDIRIZZI" | tr -s ' ' ',' | sed 's/^,//;s/,$//')"
+
   mkdir -p "$(dirname "$CONFIG")"
   ( umask 077
     {
       echo "# Credenziali del NAS. Non copiare questo file in un repository."
       echo "# Generato da nas-setup.sh il $(date '+%Y-%m-%d %H:%M')."
-      echo "NAS_URL=$FOUND"
+      echo "# NAS_URL: piu' indirizzi in ordine di preferenza, risponde il primo"
+      echo "# raggiungibile (LAN in casa, Tailscale fuori, QuickConnect nel cloud)."
+      echo "NAS_URL=$NAS_URL_RIGA"
       echo "NAS_USER=$USER_NAME"
       echo "NAS_PASS=$PASS"
       [ -n "$OTP" ] && echo "NAS_OTP_SECRET=$OTP"
@@ -341,6 +416,11 @@ if "$NAS" check; then
   echo
   echo "Da qui in poi basta chiedere a Claude, per esempio:"
   echo "  \"controlla il NAS\"   \"quanto spazio e' rimasto?\"   \"il backup e' andato?\""
+  if "$NAS" cloud 2>/dev/null | grep -q "^     NAS_URL=https"; then
+    echo
+    echo "Per usare il NAS anche dalle sessioni cloud (dal telefono), la ricetta"
+    echo "da incollare nelle impostazioni dell'environment: $NAS cloud"
+  fi
 else
   echo
   echo "Il collegamento non e' riuscito. La riga di errore qui sopra dice cosa manca;"

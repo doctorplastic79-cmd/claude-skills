@@ -9,6 +9,12 @@ Gestione autonoma di un NAS Synology con DSM 7 tramite `scripts/nas`, un client
 dell'API Web che usa solo la libreria standard di Python: nessuna installazione,
 funziona identico sul Mac e dentro una sessione cloud aperta dal cellulare.
 
+I percorsi qui sotto (`scripts/nas`, `references/...`) sono relativi alla
+cartella di questa skill, quella indicata come *base directory* quando viene
+caricata: sul Mac di solito `~/.claude/skills/nas-synology`, nel repository
+`skills/nas-synology`. La cartella di lavoro della sessione e' un'altra cosa:
+usa il percorso completo.
+
 ## Prima di tutto: verifica il canale
 
 Esegui **sempre** questo come primo comando della sessione, prima di promettere
@@ -35,12 +41,17 @@ credenziali, offre di creare e installare la chiave SSH, scrive
 `health` sul NAS vero. Se qualcosa non va, si ferma dicendo quale passo e
 perche'.
 
-Negli ambienti senza nessuno a cui chiedere - una sessione cloud con le
-variabili gia' impostate - la stessa cosa in un colpo solo:
+**Lo script fa domande, e sotto il Bash tool non c'e' un terminale a cui
+farle.** Se lo lanci tu, Claude, da un tool, si ferma subito e lo dice: in quel
+caso chiedi all'utente di eseguirlo lui dal Terminale del Mac, oppure passagli
+tutto dall'ambiente e non chiedera' niente:
 
 ```bash
-scripts/nas-setup.sh --non-interattivo
+NAS_URL=... NAS_USER=... NAS_PASS=... scripts/nas-setup.sh --non-interattivo
 ```
+
+Non incollare mai la password in un comando che finisce nella conversazione:
+se serve, e' l'utente a lanciarlo.
 
 Solo se lo script si ferma su un punto che richiede una decisione umana (creare
 l'utente DSM, aprire il NAS su Internet) porta l'utente su `references/setup.md`.
@@ -50,12 +61,22 @@ l'utente DSM, aprire il NAS su Internet) porta l'utente su `references/setup.md`
 | Trasporto | Da dove funziona | Cosa permette |
 |---|---|---|
 | **API Web DSM** (HTTPS) | Mac **e** sessioni cloud/cellulare | stato, storage, file, pacchetti, utenti, backup, log |
-| **SSH** | solo dove il NAS e' raggiungibile in rete: Mac su LAN o VPN | shell completa, `synopkg`, `btrfs`, `smartctl`, rsync |
+| **SSH** | solo dove il NAS e' raggiungibile in rete: Mac su LAN o Tailscale | shell completa, `synopkg`, `btrfs`, `smartctl`, rsync |
 
-Da cellulare la sessione gira in cloud: il NAS **deve** essere esposto su
-Internet via HTTPS e il suo dominio ammesso dalla network policy dell'ambiente,
-altrimenti nessun trasporto funziona. `nas check` lo dice subito. Non fingere
-che un comando sia riuscito quando il canale non c'e'.
+Il client capisce da solo dove sta girando (`Ambiente mac` o `cloud`, prima
+riga di `check`) e prova gli indirizzi del NAS in ordine: `NAS_URL` puo'
+elencarne piu' d'uno - LAN, poi Tailscale, poi QuickConnect - e risponde il
+primo raggiungibile. La stessa configurazione vale in casa, fuori casa e nel
+cloud, senza toccarla.
+
+**In una sessione cloud** (dal telefono o dal web) la LAN e Tailscale non
+esistono: il client non li prova nemmeno. Serve un indirizzo pubblico e il suo
+dominio ammesso dalla network policy dell'environment. Se `check` dice che il
+dominio e' *negato dalla network policy*, non e' un guasto e non e' da
+aggirare: esegui `scripts/nas cloud` e riporta all'utente, parola per parola,
+la ricetta che stampa (dominio da permettere, variabili da impostare). E' un
+gesto suo, una volta sola. Non fingere che un comando sia riuscito quando il
+canale non c'e'.
 
 ## Comandi
 
@@ -94,6 +115,7 @@ scripts/nas security        # esito dell'analisi di sicurezza di DSM
 scripts/nas users           # utenti locali
 scripts/nas package stop Docker --yes
 scripts/nas ssh 'df -h'     # shell, solo dove SSH e' disponibile
+scripts/nas cloud           # cosa impostare nell'environment cloud, dal telefono
 ```
 
 Aggiungi `--json` a qualunque comando per avere i dati grezzi da elaborare.
@@ -144,6 +166,10 @@ in `scripts/nas`.
 Per mettere Claude in sola lettura per un'intera sessione:
 `export NAS_READONLY=1` — blocca ogni scrittura anche con `--yes`.
 
+Per un comando SSH che scrive, `--yes` va prima del comando o in coda:
+`scripts/nas ssh 'sudo synopkg stop Docker' --yes`. Se e' in mezzo al comando
+remoto, e' parte del comando remoto.
+
 ## Situazioni ricorrenti
 
 Le procedure passo-passo stanno in `references/operations.md`: volume quasi
@@ -159,7 +185,7 @@ risponde come quello vero.
 tests/run-tests.sh
 ```
 
-77 prove: lettura, file, blocchi sulle scritture, re-login su sessione scaduta,
+116 prove: lettura, file, blocchi sulle scritture, re-login su sessione scaduta,
 diagnosi TLS, messaggi d'errore, logica di `nas-setup.sh`, e i codici TOTP
 contro i vettori della RFC 6238. Eseguile
 dopo ogni modifica al client, e aggiungine una quando aggiungi un comando: e'
