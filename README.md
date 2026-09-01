@@ -149,7 +149,7 @@ Tutto quello che serve sta in un comando solo:
 skills/nas-synology/scripts/nas-setup.sh
 ```
 
-Aggiorna il repository e installa le skill, esegue le 77 prove del client,
+Aggiorna il repository e installa le skill, esegue le 116 prove del client,
 cerca il NAS in rete, chiede le credenziali, offre di creare e installare la
 chiave SSH, scrive `~/.config/nas-synology/config.env` con permessi `600` e
 chiude mostrando lo stato del NAS. Se un passo fallisce si ferma dicendo quale
@@ -158,12 +158,17 @@ e perche'. Con `--non-interattivo` fa lo stesso senza domande, leggendo
 cloud. Le credenziali stanno solo in quel file o nell'ambiente, mai in questo
 repository.
 
-Perche' funzioni **anche dal cellulare** servono tre cose: la skill caricata
-sull'account claude.ai, il NAS raggiungibile su Internet via HTTPS (DDNS
-Synology + certificato Let's Encrypt) e le variabili `NAS_URL`, `NAS_USER`,
-`NAS_PASS`, `NAS_OTP_SECRET` impostate nelle variabili d'ambiente del cloud
-environment, con il dominio del NAS ammesso dalla network policy. La skill pesa
-80 KB, quindi si carica intera, senza il loader che serve a `video-shotcraft`:
+Una sola configurazione vale ovunque: `NAS_URL` elenca gli indirizzi del NAS
+(LAN, Tailscale, QuickConnect) e il client, che riconosce da solo se gira sul
+Mac o in un container cloud, usa il primo raggiungibile.
+
+Perche' funzioni **anche dal cellulare** servono tre cose, e
+`skills/nas-synology/scripts/nas cloud` le stampa gia' compilate: il dominio
+QuickConnect (o DDNS) del NAS **ammesso dalla network policy** dell'environment
+cloud - verificato: senza, il proxy di uscita rifiuta la connessione - le
+variabili `NAS_URL`, `NAS_USER`, `NAS_PASS`, `NAS_OTP_SECRET` nell'environment,
+e la skill caricata sull'account. La skill pesa 90 KB, quindi si carica intera,
+senza il loader che serve a `video-shotcraft`:
 
 ```bash
 ./package-for-claude-ai.sh nas-synology

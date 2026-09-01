@@ -45,9 +45,19 @@ ordinarie, non danno licenza di cancellare senza mostrare cosa.
   variabili d'ambiente. Il client avvisa se i permessi sono troppo larghi.
 - Non vanno stampate in chat, ne' scritte in file del repository, messaggi di
   commit, descrizioni di pull request o log.
-- Il file di sessione `~/.cache/nas-synology/session.json` contiene un SID
-  valido e un device token: vale quanto una password finche' la sessione dura.
-  `scripts/nas logout` lo invalida e lo cancella.
+- La cache `~/.cache/nas-synology/` contiene un SID valido (`session.json`) e
+  il device token 2FA (`device.json`): insieme valgono quanto una password.
+  Nasce con permessi 700/600. `scripts/nas logout` invalida la sessione sul
+  NAS e cancella entrambi i file in locale, ma **non revoca il dispositivo
+  attendibile su DSM**: quello si toglie da DSM, *Personale > Account >
+  Dispositivi attendibili*, dove compare come "claude-nas-skill".
+- **Nel cloud le credenziali stanno nelle variabili dell'environment**, e sono
+  quelle di un utente DSM: chi riesce a leggerle ha il NAS per intero, e
+  `NAS_READONLY` o `--yes` sono freni per Claude, non per lui. Due
+  conseguenze pratiche: l'environment cloud va trattato come il file
+  `config.env`, cioe' come una cosa che contiene una password; e se dal
+  telefono ti servono solo i file, un utente DSM *non* amministratore
+  limita il danno possibile (perdi `storage`, `packages`, `backups`).
 - Se una credenziale finisce in un posto sbagliato, cambiarla in DSM e' piu'
   rapido e piu' sicuro che tentare di ripulire il posto.
 

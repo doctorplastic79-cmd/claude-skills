@@ -21,12 +21,29 @@ DI_SOLA_LETTURA = [
     "df -h 2>&1",
     "ls -la /volume1",
     "sudo btrfs filesystem usage /volume1",
+    "sudo btrfs subvolume list /volume1",
+    "sudo mdadm --detail /dev/md2",
+    "ip addr show",
     "synopkg list --name",
     "docker ps -a",
+    "docker logs plex | tail -50",
+    "sed -n '1,5p' /etc/VERSION",
+    "cat /etc/VERSION && df -h",
 ]
 
 CHE_SCRIVONO = [
     "du -sh /volume1/* | tee /tmp/elenco",       # scrive il secondo comando
+    "sudo mdadm --fail /dev/md2 /dev/sata1p5",   # il playbook lo vieta
+    "sudo btrfs filesystem resize max /volume1",
+    "sudo sed -i 's/a/b/' /etc/synoinfo.conf",
+    "ip addr flush dev eth0",
+    "docker rmi plex",
+    "docker exec plex rm -rf /config",
+    "ls /volume1; rm -rf /volume1/foto",         # gia' coperto, ma resta
+    "ls /volume1 & rm -rf /volume1/foto",        # & in mezzo
+    "ls $(rm -rf /volume1/foto)",                # sostituzione di comando
+    "ls `rm -rf /volume1/foto`",
+    "ls\nrm -rf /volume1/foto",                  # a capo
     "cat /etc/passwd > /tmp/x",
     "find /volume1 -name '*.tmp' | xargs rm",
     "sudo rm -rf /volume1/foto",

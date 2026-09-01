@@ -21,6 +21,7 @@ export NAS_OTP_SECRET=JBSWY3DPEHPK3PXP
 export NAS_CONFIG="$WORK/assente.env"     # niente config reale nei test
 export NAS_CACHE_DIR="$WORK/cache"
 unset NAS_READONLY NAS_SSH_HOST NAS_SSH_USER NAS_OTP_CODE 2>/dev/null || true
+export NAS_AMBIENTE=mac            # le prove del cloud lo cambiano esplicitamente
 
 PASS=0
 FAILED=()
@@ -47,8 +48,10 @@ check() {
   out="$("$@" 2>&1)"; rc=$?
   if [ "$rc" != "$want_rc" ]; then
     FAILED+=("$name: exit $rc invece di $want_rc -- $(echo "$out" | tail -1)")
+    [ -n "${NAS_TEST_VERBOSE:-}" ] && printf '\n--- %s ---\n%s\n' "$name" "$out"
   elif [ -n "$expect" ] && ! grep -qF -- "$expect" <<<"$out"; then
     FAILED+=("$name: manca \"$expect\" nell'output -- $(echo "$out" | tail -1)")
+    [ -n "${NAS_TEST_VERBOSE:-}" ] && printf '\n--- %s ---\n%s\n' "$name" "$out"
   else
     PASS=$((PASS + 1)); printf '.'; return 0
   fi
@@ -176,6 +179,85 @@ check "manca NAS_URL"               "manca NAS_URL" 1 -- env NAS_URL= "$NAS" inf
 
 SETUP="$HERE/../scripts/nas-setup.sh"
 
+# --- piu' indirizzi, un solo file di configurazione ---------------------
+# In casa risponde la LAN, fuori Tailscale, nel cloud QuickConnect: il client
+# prova in ordine e tiene il primo che risponde. Qui il primo e' una porta
+# morta e il secondo il finto DSM.
+MORTO="http://127.0.0.1:1"
+check "fallback: salta la porta morta e usa la seconda" "DS923+" 0 -- \
+  env NAS_URL="$MORTO,$NAS_URL" NAS_CACHE_DIR="$WORK/multi" "$NAS" check
+check "fallback: check mostra perche' la prima e' saltata" "non raggiungibile" 0 -- \
+  env NAS_URL="$MORTO,$NAS_URL" NAS_CACHE_DIR="$WORK/multi-fresh" "$NAS" check
+if grep -q "\"url\": \"$NAS_URL\"" "$WORK/multi/url.json" 2>/dev/null; then
+  PASS=$((PASS + 1)); printf '.'
+else
+  FAILED+=("fallback: l'indirizzo che ha risposto non e' stato ricordato in url.json"); printf 'x'
+fi
+check "fallback: nessuno risponde, elenco per indirizzo" "$MORTO" 1 -- \
+  env NAS_URL="$MORTO,http://127.0.0.1:2" NAS_CACHE_DIR="$WORK/multi2" "$NAS" info
+check "fallback: nessuno risponde, consiglio per il Mac" "Tailscale attivo" 1 -- \
+  env NAS_URL="$MORTO,http://127.0.0.1:2" NAS_CACHE_DIR="$WORK/multi2" "$NAS" info
+
+# --- sessione cloud: LAN e Tailscale non si provano nemmeno --------------
+check "cloud: indirizzi locali saltati con motivo" "non raggiungibile da una sessione cloud" 1 -- \
+  env NAS_AMBIENTE=cloud NAS_URL="https://192.168.1.10:5001,https://100.73.172.85:5001" \
+  NAS_CACHE_DIR="$WORK/cloud1" "$NAS" info
+check "cloud: senza indirizzo pubblico rimanda a 'nas cloud'" "nas cloud" 1 -- \
+  env NAS_AMBIENTE=cloud NAS_URL="https://192.168.1.10:5001" NAS_CACHE_DIR="$WORK/cloud1" "$NAS" info
+# Nel cloud il finto DSM (127.0.0.1) e' giustamente un indirizzo locale e va
+# rifiutato: la riga "Ambiente" si verifica con un ambiente neutro.
+check "check dichiara l'ambiente" "Ambiente altro" 0 -- \
+  env NAS_AMBIENTE=altro NAS_CACHE_DIR="$WORK/cloud2" "$NAS" check
+
+# --- il proxy cloud che nega un dominio -----------------------------------
+# Un finto proxy risponde 403 al CONNECT verso nas-negato.example e lo annota
+# nel suo stato, esattamente come il gateway vero: il client deve dire
+# "network policy", non "non raggiungibile".
+PROXY_PORT=$((PORT + 2))
+python3 "$HERE/fake_proxy.py" "$PROXY_PORT" nas-negato.example & PROXY_PID=$!
+disown "$PROXY_PID" 2>/dev/null || true
+for _ in $(seq 40); do
+  curl -sf -o /dev/null "http://127.0.0.1:$PROXY_PORT/__agentproxy/status" && break
+  sleep 0.1
+done
+check "cloud: dominio negato dalla policy, un solo indirizzo" "network policy" 1 -- \
+  env NAS_AMBIENTE=cloud HTTPS_PROXY="http://127.0.0.1:$PROXY_PORT" https_proxy="http://127.0.0.1:$PROXY_PORT" NO_PROXY=127.0.0.1 no_proxy=127.0.0.1 \
+  NAS_URL="https://nas-negato.example:5001" NAS_CACHE_DIR="$WORK/cloud3" "$NAS" info
+check "cloud: la diagnosi nomina il dominio da aggiungere" "aggiungi nas-negato.example" 1 -- \
+  env NAS_AMBIENTE=cloud HTTPS_PROXY="http://127.0.0.1:$PROXY_PORT" https_proxy="http://127.0.0.1:$PROXY_PORT" NO_PROXY=127.0.0.1 no_proxy=127.0.0.1 \
+  NAS_URL="https://nas-negato.example:5001" NAS_CACHE_DIR="$WORK/cloud3" "$NAS" info
+check "cloud: negato anche in lista, con gli altri saltati" "negato dalla network policy" 1 -- \
+  env NAS_AMBIENTE=cloud HTTPS_PROXY="http://127.0.0.1:$PROXY_PORT" https_proxy="http://127.0.0.1:$PROXY_PORT" NO_PROXY=127.0.0.1 no_proxy=127.0.0.1 \
+  NAS_URL="https://192.168.1.10:5001,https://nas-negato.example:5001" NAS_CACHE_DIR="$WORK/cloud4" "$NAS" info
+kill "$PROXY_PID" 2>/dev/null
+
+# --- la ricetta per l'environment cloud -----------------------------------
+check "cloud: la ricetta elenca il dominio pubblico" "informamedica-nas.fr3.quickconnect.to" 0 -- \
+  env NAS_URL="https://192.168.1.10:5001,https://informamedica-nas.fr3.quickconnect.to" "$NAS" cloud
+check "cloud: la ricetta tiene solo gli indirizzi pubblici" "NAS_URL=https://informamedica-nas.fr3.quickconnect.to" 0 -- \
+  env NAS_URL="https://192.168.1.10:5001,https://informamedica-nas.fr3.quickconnect.to" "$NAS" cloud
+check "cloud: la ricetta senza indirizzo pubblico spiega QuickConnect" "Accesso esterno" 0 -- \
+  env NAS_URL="https://192.168.1.10:5001" "$NAS" cloud
+if env NAS_URL="https://informamedica-nas.fr3.quickconnect.to" "$NAS" cloud 2>&1 | grep -q "segreta"; then
+  FAILED+=("cloud: la ricetta ha stampato la password"); printf 'x'
+else
+  PASS=$((PASS + 1)); printf '.'
+fi
+
+# --- NAS_VERIFY_TLS=no vale solo per gli host locali ----------------------
+if python3 "$HERE/check_verify_scope.py" "$NAS"; then
+  PASS=$((PASS + 1)); printf '.'
+else
+  FAILED+=("NAS_VERIFY_TLS=no toglie la verifica anche a un host pubblico"); printf 'x'
+fi
+
+# --- python e bash classificano gli host allo stesso modo -----------------
+if python3 "$HERE/check_host_parity.py" "$NAS" "$HERE/../scripts/lib-host.sh"; then
+  PASS=$((PASS + 1)); printf '.'
+else
+  FAILED+=("is_local_host: python e bash non concordano"); printf 'x'
+fi
+
 # --- verso quali host si puo' configurare SSH --------------------------
 # Una chiave privata mandata all'host sbagliato non si richiama indietro.
 . "$HERE/../scripts/lib-host.sh"
@@ -191,6 +273,101 @@ if [ -z "$host_ko" ]; then
 else
   FAILED+=("classificazione host sbagliata per:$host_ko"); printf 'x'
 fi
+
+stato() { curl -s "$NAS_URL/__control/state" | python3 -c "import json,sys; print(json.load(sys.stdin)['$1'])"; }
+stato_str() { curl -s "$NAS_URL/__control/state" | python3 -c "import json,sys; print(json.load(sys.stdin).get('$1'))"; }
+
+# --- il login viaggia in POST: niente password nell'URL ---------------------
+rm -rf "$WORK/post"
+env NAS_CACHE_DIR="$WORK/post" "$NAS" info >/dev/null 2>&1
+if [ "$(stato_str ultimo_login_metodo)" = "POST" ]; then
+  PASS=$((PASS + 1)); printf '.'
+else
+  FAILED+=("login: le credenziali viaggiano ancora in GET ($(stato_str ultimo_login_metodo))"); printf 'x'
+fi
+
+# --- tutta la cache nasce privata, non solo la sessione ---------------------
+perm() { stat -c '%a' "$1" 2>/dev/null || stat -f '%Lp' "$1" 2>/dev/null; }
+if [ "$(perm "$WORK/post/apiinfo.json")" = "600" ] && [ "$(perm "$WORK/post/device.json")" = "600" ] \
+   && [ "$(perm "$WORK/post")" = "700" ]; then
+  PASS=$((PASS + 1)); printf '.'
+else
+  FAILED+=("cache: permessi troppo larghi (apiinfo $(perm "$WORK/post/apiinfo.json"), device $(perm "$WORK/post/device.json"), dir $(perm "$WORK/post"))"); printf 'x'
+fi
+
+# --- 2FA: il device token si usa, non si registra un dispositivo a login ---
+# Primo login con OTP, i successivi con il device token ricevuto: DSM deve
+# vedere UN dispositivo attendibile, non uno per ogni comando.
+
+rm -rf "$WORK/2fa"
+env NAS_CACHE_DIR="$WORK/2fa" "$NAS" info >/dev/null 2>&1
+PRIMA_OTP=$(stato login_con_otp); PRIMA_DEV=$(stato login_con_device)
+curl -sf -o /dev/null "$NAS_URL/__control/expire"      # sessione invalidata: serve un nuovo login
+env NAS_CACHE_DIR="$WORK/2fa" "$NAS" info >/dev/null 2>&1
+curl -sf -o /dev/null "$NAS_URL/__control/expire"
+env NAS_CACHE_DIR="$WORK/2fa" "$NAS" info >/dev/null 2>&1
+if [ "$(stato login_con_otp)" = "$PRIMA_OTP" ] && [ "$(stato login_con_device)" -ge $((PRIMA_DEV + 2)) ]; then
+  PASS=$((PASS + 1)); printf '.'
+else
+  FAILED+=("2FA: i login successivi usano ancora l'OTP invece del device token (otp $PRIMA_OTP->$(stato login_con_otp), device $PRIMA_DEV->$(stato login_con_device))"); printf 'x'
+fi
+
+# --- credenziali sbagliate: UN tentativo, non sei (Auto Block) -------------
+PRIMA_RIF=$(stato login_rifiutati)
+env NAS_PASS=sbagliata NAS_CACHE_DIR="$WORK/autoblock" "$NAS" health >/dev/null 2>&1
+if [ "$(stato login_rifiutati)" = $((PRIMA_RIF + 1)) ]; then
+  PASS=$((PASS + 1)); printf '.'
+else
+  FAILED+=("auto-block: health con password sbagliata ha fatto $(( $(stato login_rifiutati) - PRIMA_RIF )) tentativi di login invece di 1"); printf 'x'
+fi
+check "health si ferma su un errore fatale invece di bucherellarsi" "password sbagliata" 1 -- \
+  env NAS_PASS=sbagliata NAS_CACHE_DIR="$WORK/autoblock2" "$NAS" health
+
+# --- upload con sessione scaduta: rifa' il login, come le altre chiamate ----
+rm -rf "$WORK/up"
+env NAS_CACHE_DIR="$WORK/up" "$NAS" info >/dev/null 2>&1
+curl -sf -o /dev/null "$NAS_URL/__control/expire"
+check "put dopo SID scaduto rifa' il login" "caricato" 0 -- \
+  env NAS_CACHE_DIR="$WORK/up" "$NAS" put "$WORK/da-caricare.txt" /volume1/Drive --yes
+
+# --- variabili mancanti: tutte insieme ---------------------------------------
+check "variabili mancanti elencate insieme" "mancano NAS_URL, NAS_USER, NAS_PASS" 1 -- \
+  env -u NAS_URL -u NAS_USER -u NAS_PASS "$NAS" info
+check "variabili mancanti: rimando a setup e a 'nas cloud'" "nas cloud" 1 -- \
+  env -u NAS_URL "$NAS" info
+
+# --- output in pipe: | head non e' un errore ---------------------------------
+if "$NAS" packages 2>/dev/null | head -1 >/dev/null; then
+  PASS=$((PASS + 1)); printf '.'
+else
+  FAILED+=("pipe: 'nas packages | head' esce con errore"); printf 'x'
+fi
+if "$NAS" api list 2>&1 | head -1 | grep -q "errore imprevisto"; then
+  FAILED+=("pipe: BrokenPipeError arriva all'utente"); printf 'x'
+else
+  PASS=$((PASS + 1)); printf '.'
+fi
+
+# --- timeout piu' alto di default dietro QuickConnect --------------------------
+if python3 "$HERE/check_timeout_relay.py" "$NAS"; then
+  PASS=$((PASS + 1)); printf '.'
+else
+  FAILED+=("timeout: dietro QuickConnect resta 30 s invece di 90"); printf 'x'
+fi
+
+# --- setup senza terminale: lo dice, non si blocca sulle domande -------------
+check "setup senza terminale e senza variabili lo dice" "Terminale" 2 -- \
+  env -u NAS_URL -u NAS_USER -u NAS_PASS NAS_CONFIG="$WORK/tty.env" "$SETUP" --salta-collaudo --salta-installazione </dev/null
+check "setup senza terminale ma con le variabili procede" "Pronto" 0 -- \
+  env NAS_CONFIG="$WORK/tty2.env" NAS_CACHE_DIR="$WORK/tty2-cache" "$SETUP" --salta-collaudo --salta-installazione </dev/null
+
+# --- un aggiornamento DSM rinomina un'API: il catalogo in cache va ricaricato --
+# Il catalogo e' gia' in cache con SYNO.Core.Share. Il finto DSM la fa sparire:
+# il client deve accorgersi del 102, ricaricare, e ripiegare su FileStation.
+rm -rf "$WORK/cat"; env NAS_CACHE_DIR="$WORK/cat" "$NAS" shares >/dev/null 2>&1
+curl -sf -o /dev/null "$NAS_URL/__control/rinomina-share"
+check "API sparita dopo un aggiornamento: ricarica e ripiega" "Drive" 0 -- \
+  env NAS_CACHE_DIR="$WORK/cat" "$NAS" shares
 
 # --- errori che non devono mai uscire come traceback --------------------
 check "timeout di lettura diagnosticato" "non ha risposto entro" 1 -- \
@@ -254,6 +431,45 @@ else
   FAILED+=("TLS: i messaggi non distinguono CA mancanti da certificato del NAS"); printf 'x'
 fi
 
+# --- nas ssh '<cmd>' --yes: il --yes non deve finire nel comando remoto ------
+# Un finto ssh stampa gli argomenti ricevuti: cosi' si vede cosa arriverebbe
+# al NAS. Era la forma documentata, e mandava `--yes` a synopkg.
+mkdir -p "$WORK/fakebin"
+cat > "$WORK/fakebin/ssh" <<'EOF'
+#!/bin/sh
+echo "SSH-ARGV: $*"
+EOF
+chmod +x "$WORK/fakebin/ssh"
+check "ssh: --yes in coda non finisce nel comando remoto" "SSH-ARGV: " 0 -- \
+  env PATH="$WORK/fakebin:$PATH" NAS_SSH_HOST=192.168.1.10 "$NAS" ssh 'sudo synopkg stop Docker' --yes
+if env PATH="$WORK/fakebin:$PATH" NAS_SSH_HOST=192.168.1.10 "$NAS" ssh 'sudo synopkg stop Docker' --yes 2>&1 \
+   | grep "SSH-ARGV" | grep -q -- "--yes"; then
+  FAILED+=("ssh: il --yes e' arrivato al comando remoto"); printf 'x'
+else
+  PASS=$((PASS + 1)); printf '.'
+fi
+check "ssh: --yes in testa funziona"  "synopkg stop Docker" 0 -- \
+  env PATH="$WORK/fakebin:$PATH" NAS_SSH_HOST=192.168.1.10 "$NAS" ssh --yes 'sudo synopkg stop Docker'
+check "ssh: senza comando lo dice"    "manca il comando" 2 -- \
+  env PATH="$WORK/fakebin:$PATH" NAS_SSH_HOST=192.168.1.10 "$NAS" ssh --yes
+check "ssh: il freno resta senza --yes" "sola lettura" 2 -- \
+  env PATH="$WORK/fakebin:$PATH" NAS_SSH_HOST=192.168.1.10 "$NAS" ssh 'sudo synopkg stop Docker'
+
+# --- setup con piu' indirizzi ----------------------------------------------
+check "setup: conserva tutti gli indirizzi di NAS_URL" "Pronto" 0 -- \
+  env NAS_URL="$NAS_URL,https://100.73.172.85:5001,https://informamedica-nas.fr3.quickconnect.to" \
+  NAS_CONFIG="$WORK/setup-multi.env" NAS_CACHE_DIR="$WORK/setup-multi-cache" "$SETUP" \
+  --non-interattivo --salta-collaudo --salta-installazione
+if grep -q "^NAS_URL=$NAS_URL,https://100.73.172.85:5001,https://informamedica-nas.fr3.quickconnect.to$" "$WORK/setup-multi.env" 2>/dev/null; then
+  PASS=$((PASS + 1)); printf '.'
+else
+  FAILED+=("setup: NAS_URL con piu' indirizzi non scritto nell'ordine giusto"); printf 'x'
+fi
+check "setup: con un indirizzo pubblico rimanda a 'nas cloud'" "nas cloud" 0 -- \
+  env NAS_URL="$NAS_URL,https://informamedica-nas.fr3.quickconnect.to" \
+  NAS_CONFIG="$WORK/setup-multi2.env" NAS_CACHE_DIR="$WORK/setup-multi2-cache" "$SETUP" \
+  --non-interattivo --salta-collaudo --salta-installazione
+
 # --- lo script di configurazione ---------------------------------------
 # Sempre con --salta-installazione e --salta-collaudo: qui interessa la sua
 # logica, non che reinstalli la skill o rilanci ricorsivamente queste prove.
@@ -263,7 +479,7 @@ check "setup: senza NAS_URL lo dice"      "serve NAS_URL" 1 -- \
   env -u NAS_URL NAS_CONFIG="$WORK/setup-a.env" "$SETUP" \
   --non-interattivo --salta-collaudo --salta-installazione
 check "setup: configura e verifica"       "Pronto" 0 -- \
-  env NAS_CONFIG="$WORK/setup-b.env" "$SETUP" \
+  env NAS_CONFIG="$WORK/setup-b.env" NAS_CACHE_DIR="$WORK/setup-b-cache" "$SETUP" \
   --non-interattivo --salta-collaudo --salta-installazione
 if [ "$(stat -c '%a' "$WORK/setup-b.env" 2>/dev/null || stat -f '%Lp' "$WORK/setup-b.env" 2>/dev/null)" = "600" ]; then
   PASS=$((PASS + 1)); printf '.'
