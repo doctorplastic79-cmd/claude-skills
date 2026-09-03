@@ -1,3 +1,6 @@
 # artefatto di build, si rigenera con ./package-for-claude-ai.sh
 *.zip
+
+# bytecode generato dai test
 __pycache__/
+*.pyc

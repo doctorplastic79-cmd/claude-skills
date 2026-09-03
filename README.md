@@ -11,6 +11,8 @@ riutilizzabili e non appesantiscono il codice delle applicazioni.
 | `skills/heygen-avatar` | crea un avatar HeyGen persistente (volto + voce) per l'agente, l'utente o un personaggio |
 | `skills/heygen-video` | genera video HeyGen con presenter, dall'idea allo script al video finito |
 | `skills/heygen-translate` | traduce e doppia un video esistente in un'altra lingua, con voice cloning e lip-sync |
+| `skills/nas-synology` | entra nel NAS Synology e lo gestisce: dischi, spazio, file, pacchetti, backup, log |
+| `skills/regia` | fa eseguire il lavoro all'altro modello mentre tu fai la regia: brief, schemi JSON, esecuzione in parallelo, contraddittorio, registro |
 | `skills/kits` | conversione voce-a-voce con l'API di Kits.ai: elenca i modelli vocali e converte file WAV/MP3 con il modello scelto |
 
 | Preset | A cosa serve |
@@ -135,6 +137,116 @@ automatica dell'MCP. La chiave va messa nell'ambiente di chi usa la skill
 (shell profile o `.env` locale), mai in questo repository. Dettagli completi
 nei singoli `SKILL.md` e nel repository originale.
 
+## Skill NAS Synology
+
+`nas-synology` fa entrare Claude nel NAS di casa e glielo fa gestire: stato di
+dischi e volumi, spazio libero, cartelle condivise, file, pacchetti e container,
+backup di Hyper Backup, log. Il client `scripts/nas` parla l'API Web di DSM 7
+usando solo la libreria standard di Python, quindi funziona uguale sul Mac e
+dentro una sessione cloud aperta dal cellulare.
+
+Tutto quello che serve sta in un comando solo:
+
+```bash
+skills/nas-synology/scripts/nas-setup.sh
+```
+
+Aggiorna il repository e installa le skill, esegue le 116 prove del client,
+cerca il NAS in rete, chiede le credenziali, offre di creare e installare la
+chiave SSH, scrive `~/.config/nas-synology/config.env` con permessi `600` e
+chiude mostrando lo stato del NAS. Se un passo fallisce si ferma dicendo quale
+e perche'. Con `--non-interattivo` fa lo stesso senza domande, leggendo
+`NAS_URL`, `NAS_USER` e `NAS_PASS` dall'ambiente: e' la forma per gli ambienti
+cloud. Le credenziali stanno solo in quel file o nell'ambiente, mai in questo
+repository.
+
+Una sola configurazione vale ovunque: `NAS_URL` elenca gli indirizzi del NAS
+(LAN, Tailscale, QuickConnect) e il client, che riconosce da solo se gira sul
+Mac o in un container cloud, usa il primo raggiungibile.
+
+Perche' funzioni **anche dal cellulare** servono tre cose, e
+`skills/nas-synology/scripts/nas cloud` le stampa gia' compilate: il dominio
+QuickConnect (o DDNS) del NAS **ammesso dalla network policy** dell'environment
+cloud - verificato: senza, il proxy di uscita rifiuta la connessione - le
+variabili `NAS_URL`, `NAS_USER`, `NAS_PASS`, `NAS_OTP_SECRET` nell'environment,
+e la skill caricata sull'account. La skill pesa 90 KB, quindi si carica intera,
+senza il loader che serve a `video-shotcraft`:
+
+```bash
+./package-for-claude-ai.sh nas-synology
+```
+
+e poi *Impostazioni > Capacita' > Skill > Carica skill* su claude.ai. Dal Mac in
+LAN si aggiunge il trasporto SSH, che apre la shell di DSM.
+
+Il client ha un collaudo che non richiede un NAS, da eseguire dopo ogni
+modifica:
+
+```bash
+skills/nas-synology/tests/run-tests.sh
+```
+
+Le operazioni che modificano il NAS richiedono il flag `--yes`; formattazioni,
+RAID, rete, account e spegnimento restano fuori dalla portata della skill e
+vanno fatte da DSM. `NAS_READONLY=1` mette tutto in sola lettura. Dettagli in
+`skills/nas-synology/references/`.
+
+## Skill Regia
+
+`regia` divide il lavoro fra i due modelli: chi la usa scrive il brief, sceglie
+il formato della risposta, verifica e integra; a eseguire è **l'altro** modello.
+Da Claude Code delega a ChatGPT tramite la CLI ufficiale `codex`; installata
+sotto `~/.codex/skills/` fa il contrario e delega a Claude (`claude -p`). La
+scelta è automatica e viene dal percorso in cui la skill è installata, quindi
+la stessa copia funziona in tutti e due i versi senza configurazione.
+
+In entrambi i casi si usa l'abbonamento, non una chiave API: nessun costo a
+token. Il prerequisito è la CLI dell'esecutore, autenticata una volta sola:
+
+```bash
+npm install -g @openai/codex && codex login    # per delegare a ChatGPT
+```
+
+### Fuori dal Mac
+
+Il canale ha bisogno della CLI dell'esecutore, autenticata. Dove c'è un
+browser basta `codex login`, una volta. Dove non c'è — sessione cloud,
+container, ambiente aperto dal telefono — c'è uno script che installa,
+autentica e chiude con una chiamata vera:
+
+```bash
+skills/regia/scripts/regia-setup.sh --device   # codice a schermo
+skills/regia/scripts/regia-setup.sh            # usa $OPENAI_API_KEY
+```
+
+`--device` mostra un indirizzo e un codice: li approvi da un browser
+qualsiasi, anche dal telefono, e la macchina remota **eredita l'abbonamento**,
+senza pagare a token. La via con `OPENAI_API_KEY` non è interattiva ed è
+quella per un setup script che gira da solo alla creazione dell'ambiente, ma
+lì **si paga a consumo**. In un setup script di un cloud environment:
+
+```bash
+#!/bin/bash
+git clone --depth 1 https://github.com/doctorplastic79-cmd/claude-skills.git \
+  /opt/claude-skills || true
+/opt/claude-skills/install.sh || true
+OPENAI_API_KEY="$OPENAI_API_KEY" \
+  /opt/claude-skills/skills/regia/scripts/regia-setup.sh || true
+```
+
+`skills/regia/scripts/gpt check` dice chi esegue e se il canale è pronto;
+`skills/regia/tests/run-tests.sh` esegue 51 prove senza consumare l'abbonamento
+(con `--vivo` aggiunge una chiamata vera).
+
+Ogni lavoro lascia in `~/.regia/lavori/` brief, risposta, eventi e metadati,
+con permessi `700`: serve a verificare a posteriori che cosa è stato chiesto e
+che cosa è tornato. Quello che entra nel brief esce dalla macchina, e il
+controllo automatico sui segreti guarda il brief ma **non** i file che
+l'esecutore legge da `--dir`: quella parte resta giudizio di chi la usa.
+
+Dove non c'è una shell — per esempio in una sessione di chat su claude.ai — la
+skill non ha canale e lo dice, invece di fingere di aver delegato.
+
 ## Skill Kits.ai
 
 `kits` è autonoma: il client Python completo è in `skills/kits/scripts/`, serve
@@ -153,4 +265,7 @@ Ogni skill mantiene la licenza originale, nel file `LICENSE` della sua cartella.
   `skills/video-shotcraft/assets/audio/ATTRIBUTION.md`.
 - `heygen-avatar`, `heygen-video`, `heygen-translate` — MIT, di
   [HeyGen](https://github.com/heygen-com/skills).
+- `regia` — MIT, di Dario Palazzolo.
+- `nas-synology` — MIT, scritta per questo repository.
+- `kits` — MIT, scritta per questo repository.
 

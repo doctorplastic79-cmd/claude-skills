@@ -1,0 +1,1850 @@
+#!/usr/bin/env python3
+"""nas - client per l'API Web di Synology DSM 7.
+
+Solo libreria standard: gira sul Mac e dentro le sessioni cloud senza
+installare niente. Legge le credenziali dall'ambiente o da
+~/.config/nas-synology/config.env, mai da riga di comando.
+
+    nas check                     verifica connessione e trasporti
+    nas health                    stato completo del NAS
+    nas api list <filtro>         scopre le API disponibili su QUESTO DSM
+    nas api call <API> <metodo>   chiamata generica
+
+Le operazioni che modificano il NAS richiedono --yes.
+"""
+
+import argparse
+import base64
+import hmac
+import hashlib
+import json
+import os
+import re
+import shutil
+import socket
+import ssl
+import struct
+import subprocess
+import sys
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
+import uuid
+from pathlib import Path
+
+CONFIG_FILE = Path(
+    os.environ.get("NAS_CONFIG", Path.home() / ".config" / "nas-synology" / "config.env")
+)
+CACHE_DIR = Path(
+    os.environ.get("NAS_CACHE_DIR", Path.home() / ".cache" / "nas-synology")
+)
+SESSION_FILE = CACHE_DIR / "session.json"
+APIINFO_FILE = CACHE_DIR / "apiinfo.json"
+URL_FILE = CACHE_DIR / "url.json"
+DEVICE_FILE = CACHE_DIR / "device.json"   # il device token 2FA dura piu' della sessione
+APIINFO_TTL = 24 * 3600
+
+AUTH_ERRORS = {
+    400: "account inesistente o password sbagliata",
+    401: "account disabilitato",
+    402: "permesso negato: l'utente non ha i privilegi per questa API",
+    403: "serve il codice della verifica in due passaggi (2FA)",
+    404: "codice 2FA non valido",
+    406: "l'account deve usare la verifica in due passaggi",
+    407: "IP bloccato da Auto Block del NAS",
+    408: "password scaduta e non modificabile",
+    409: "password scaduta",
+    410: "la password deve essere cambiata al prossimo accesso",
+}
+
+COMMON_ERRORS = {
+    100: "errore sconosciuto",
+    101: "parametro api/method/version mancante",
+    102: "API inesistente su questo DSM",
+    103: "metodo inesistente per questa API",
+    104: "la versione richiesta non supporta questa funzione",
+    105: "la sessione non ha i permessi per questa operazione",
+    106: "sessione scaduta",
+    107: "sessione interrotta da un altro login",
+    119: "sessione non valida (SID scaduto)",
+    120: "parametri non validi",
+}
+
+FS_ERRORS = {
+    400: "parametro non valido per l'operazione sul file",
+    403: "utente non autorizzato a questa operazione",
+    407: "operazione non permessa",
+    408: "file o cartella inesistente",
+    411: "filesystem in sola lettura",
+    414: "esiste gia' un file con questo nome",
+    415: "quota disco superata",
+    416: "spazio esaurito sul volume",
+    417: "errore di I/O sul disco",
+    418: "nome o percorso non valido",
+    421: "risorsa occupata",
+    599: "task inesistente",
+}
+
+
+class NasError(Exception):
+    """fatal=True per gli errori che non ha senso mascherare provando un'altra API:
+    rete irraggiungibile, TLS, credenziali sbagliate, 2FA mancante."""
+
+    def __init__(self, message, fatal=False):
+        super().__init__(message)
+        self.fatal = fatal
+
+
+def die(msg, code=1):
+    # In una pipe stdout e' bufferizzato e stderr no: senza questo flush
+    # l'errore comparirebbe PRIMA delle righe gia' stampate, e chi legge
+    # (Claude compreso) vedrebbe la storia al contrario.
+    try:
+        sys.stdout.flush()
+    except Exception:
+        pass
+    print(f"nas: {msg}", file=sys.stderr)
+    sys.exit(code)
+
+
+def load_config():
+    """Carica config.env senza mai sovrascrivere le variabili gia' nell'ambiente."""
+    if not CONFIG_FILE.exists():
+        return
+    try:
+        mode = CONFIG_FILE.stat().st_mode & 0o077
+        if mode:
+            print(
+                f"nas: attenzione, {CONFIG_FILE} e' leggibile da altri utenti; "
+                f"esegui: chmod 600 {CONFIG_FILE}",
+                file=sys.stderr,
+            )
+    except OSError:
+        pass
+    for line in CONFIG_FILE.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("export "):
+            line = line[7:]
+        if "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        key = key.strip()
+        value = value.strip().strip("'\"")
+        os.environ.setdefault(key, value)
+
+
+def cfg(key, default=None, required=False):
+    value = os.environ.get(key, default)
+    if required and not value:
+        die(
+            f"manca {key}. Impostalo nell'ambiente oppure in {CONFIG_FILE} "
+            f"(vedi references/setup.md)"
+        )
+    return value
+
+
+def truthy(value, default=False):
+    if value is None:
+        return default
+    return str(value).strip().lower() in ("1", "true", "yes", "y", "on", "si", "s")
+
+
+def totp(secret, when=None, digits=6, period=30):
+    """Codice TOTP a partire dal segreto base32 mostrato da DSM in fase di setup 2FA."""
+    clean = re.sub(r"[^A-Za-z2-7]", "", secret).upper()
+    if len(clean) < 16:
+        raise NasError(
+            "NAS_OTP_SECRET e' troppo corto per essere un segreto 2FA di DSM: "
+            "usa la stringa base32 mostrata sotto il QR code in fase di attivazione",
+            fatal=True,
+        )
+    padding = "=" * (-len(clean) % 8)
+    try:
+        key = base64.b32decode(clean + padding)
+    except Exception:
+        raise NasError("NAS_OTP_SECRET non e' un segreto base32 valido", fatal=True)
+    counter = int((when or time.time()) // period)
+    digest = hmac.new(key, struct.pack(">Q", counter), hashlib.sha1).digest()
+    offset = digest[-1] & 0x0F
+    code = struct.unpack(">I", digest[offset : offset + 4])[0] & 0x7FFFFFFF
+    return str(code % (10**digits)).zfill(digits)
+
+
+# ------------------------------------------------------- ambiente e indirizzi
+
+
+def ambiente():
+    """Dove sta girando Claude. Decide quali indirizzi ha senso tentare: da un
+    container cloud la LAN e Tailscale non esistono, e provarli costa solo
+    secondi di timeout prima di un errore fuorviante. NAS_AMBIENTE forza il
+    valore, per le prove e per i casi che il rilevamento non prevede."""
+    forzato = (os.environ.get("NAS_AMBIENTE") or "").strip().lower()
+    if forzato in ("cloud", "mac", "altro"):
+        return forzato
+    if (
+        os.environ.get("CLAUDE_CODE_REMOTE", "").lower() == "true"
+        or os.environ.get("CCR_EGRESS_GATEWAY_ENABLED")
+        or Path("/root/.ccr").is_dir()
+    ):
+        return "cloud"
+    if sys.platform == "darwin":
+        return "mac"
+    return "altro"
+
+
+def is_local_host(host):
+    """Specchio di scripts/lib-host.sh: raggiungibile solo da una rete privata
+    o da un tunnel (LAN, Tailscale, .local). Un test verifica che le due
+    versioni concordino sulla stessa tabella di indirizzi."""
+    h = (host or "").lower()
+    if ".quickconnect." in h:
+        return False
+    if h.endswith(".local") or h == "localhost" or h.startswith("127."):
+        return True
+    if h.startswith("10.") or h.startswith("192.168."):
+        return True
+    if h and "." not in h and ":" not in h:
+        return True        # "nas", "diskstation": nomi risolti solo in LAN
+    m = re.match(r"^172\.(\d{1,3})\.", h)
+    if m and 16 <= int(m.group(1)) <= 31:
+        return True
+    m = re.match(r"^100\.(\d{1,3})\.", h)
+    if m and 64 <= int(m.group(1)) <= 127:
+        return True
+    return h.endswith(".ts.net")
+
+
+def host_of(url):
+    return urllib.parse.urlparse(url).hostname or ""
+
+
+def url_candidates(required=True):
+    """NAS_URL accetta piu' indirizzi, separati da virgola o spazio, in ordine
+    di preferenza: LAN, poi Tailscale, poi QuickConnect/DDNS. Cosi' la stessa
+    configurazione vale in casa, fuori casa e nel cloud: risponde il primo
+    che si raggiunge."""
+    raw = cfg("NAS_URL", required=required) or ""
+    urls = []
+    for piece in re.split(r"[,\s]+", raw.strip()):
+        if not piece:
+            continue
+        piece = piece.rstrip("/")
+        if "://" not in piece:
+            piece = "https://" + piece
+        if piece not in urls:
+            urls.append(piece)
+    return urls
+
+
+def proxy_denial(host):
+    """Nelle sessioni cloud l'uscita passa da un proxy con allowlist. Quando
+    nega un host lo annota nel suo stato: leggerlo trasforma un generico
+    "connessione fallita" nella diagnosi giusta, con il rimedio."""
+    proxy = os.environ.get("HTTPS_PROXY") or os.environ.get("https_proxy")
+    if not proxy:
+        return None
+    try:
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+        with opener.open(proxy.rstrip("/") + "/__agentproxy/status", timeout=3) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+    except Exception:
+        return None
+    for failure in data.get("recentRelayFailures") or []:
+        if str(failure.get("host", "")).split(":")[0] == host and "reject" in str(failure.get("kind", "")):
+            return failure.get("detail") or "connessione rifiutata dal proxy"
+    return None
+
+
+def read_json(path):
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+
+
+def write_json(path, data, private=True):
+    """Tutto cio' che sta nella cache nasce gia' 0600: session.json contiene
+    un SID valido, device.json un token 2FA, e non c'e' motivo per cui il
+    catalogo delle API debba essere leggibile da altri utenti."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        os.chmod(path.parent, 0o700)
+    except OSError:
+        pass
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600 if private else 0o644)
+    with os.fdopen(fd, "w", encoding="utf-8") as out:
+        out.write(json.dumps(data))
+    tmp.replace(path)
+
+
+class DSM:
+    """Client dell'API Web di DSM, con scoperta automatica di path e versioni."""
+
+    def __init__(self, insecure=False, timeout=30):
+        mancanti = [k for k in ("NAS_URL", "NAS_USER", "NAS_PASS") if not cfg(k)]
+        if mancanti:
+            die(
+                f"manca{'no' if len(mancanti) > 1 else ''} {', '.join(mancanti)}. "
+                f"Sul Mac: scripts/nas-setup.sh li chiede e li scrive in {CONFIG_FILE}. "
+                "In una sessione cloud vanno nelle variabili dell'environment: "
+                "'scripts/nas cloud' stampa la ricetta."
+            )
+        self.candidates = url_candidates()
+        self.env = ambiente()
+        self.user = cfg("NAS_USER", required=True)
+        self.login_fallito = None    # un login rifiutato non si ripete: Auto Block
+        self.timeout = int(cfg("NAS_TIMEOUT", str(timeout)))
+        self.timeout_esplicito = bool(cfg("NAS_TIMEOUT"))
+        self.readonly = truthy(cfg("NAS_READONLY"))
+        self.insecure = insecure
+        self.verify_local = truthy(cfg("NAS_VERIFY_TLS", "yes"), True)
+        self.no_ca_store = False
+        self._info = None
+        self._sid = None
+        self._token = None
+        self.tentativi = []          # (url, esito) per il rapporto di `check`
+        self.base = self._choose_url()
+        self.host = host_of(self.base)
+        if ".quickconnect." in self.host and not self.timeout_esplicito:
+            self.timeout = max(self.timeout, 90)    # e' un relay, e il NAS ha 2 GB
+        self.verify = self.verify_for(self.host)
+        self._ctx = self._ssl_context(self.verify)
+        if self.base.startswith("http://"):
+            print(
+                "nas: attenzione, stai usando http:// in chiaro. Va bene solo su LAN "
+                "fidata; da fuori casa usa https:// (porta 5001 o reverse proxy).",
+                file=sys.stderr,
+            )
+
+    def verify_for(self, host):
+        """La verifica del certificato si puo' togliere SOLO per un host locale o
+        Tailscale, dove il canale e' gia' protetto dalla rete. NAS_VERIFY_TLS=no
+        non tocca mai un indirizzo pubblico: li' l'unico modo e' --insecure, che
+        avvisa ogni volta."""
+        if self.insecure:
+            return False
+        if not self.verify_local and is_local_host(host):
+            return False
+        return True
+
+    # ------------------------------------------------------- quale indirizzo
+
+    def _choose_url(self):
+        if len(self.candidates) == 1 and not (
+            self.env == "cloud" and is_local_host(host_of(self.candidates[0]))
+        ):
+            # Un indirizzo solo: nessuna scelta da fare, si va diretti. Tranne
+            # quando e' locale e siamo nel cloud: li' non partira' mai, e la
+            # spiegazione giusta arriva dal percorso sotto.
+            return self.candidates[0]
+        ordine = list(self.candidates)
+        ultimo = (read_json(URL_FILE) or {}).get("url")
+        if ultimo in ordine:
+            ordine.remove(ultimo)
+            ordine.insert(0, ultimo)
+        for url in ordine:
+            host = host_of(url)
+            if self.env == "cloud" and is_local_host(host):
+                self.tentativi.append((url, "saltato: indirizzo locale o Tailscale, non raggiungibile da una sessione cloud"))
+                continue
+            esito = self._probe(url)
+            self.tentativi.append((url, esito))
+            if esito == "ok":
+                write_json(URL_FILE, {"url": url, "when": time.time()})
+                return url
+        righe = "\n".join(f"  {u}\n      {e}" for u, e in self.tentativi)
+        aiuto = (
+            "\nPer usare il NAS dalle sessioni cloud: 'nas cloud' stampa cosa impostare "
+            "nell'environment." if self.env == "cloud" else
+            "\nControlla che il NAS sia acceso e che tu sia in casa o con Tailscale attivo."
+        )
+        raise NasError(
+            f"nessun indirizzo del NAS risponde da qui (ambiente: {self.env}).\n{righe}{aiuto}",
+            fatal=True,
+        )
+
+    def _probe(self, url):
+        """Un colpo di SYNO.API.Info, senza login, con poco tempo: basta a
+        capire se dietro quell'indirizzo c'e' un DSM raggiungibile."""
+        host = host_of(url)
+        ctx = self._ssl_context(self.verify_for(host))
+        req = urllib.request.Request(
+            f"{url}/webapi/query.cgi?api=SYNO.API.Info&version=1&method=query&query=SYNO.API.Auth",
+            headers={"User-Agent": "nas-synology-skill/1.0"},
+        )
+        try:
+            with self._opener(host, ctx).open(req, timeout=min(6, self.timeout)) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+            return "ok" if data.get("success") else "risponde, ma non e' un DSM"
+        except urllib.error.URLError as exc:
+            if isinstance(exc.reason, ssl.SSLError):
+                return f"certificato non verificabile ({getattr(exc.reason, 'reason', exc.reason)})"
+            negato = proxy_denial(host) if self.env == "cloud" else None
+            if negato:
+                return f"negato dalla network policy dell'environment ({negato})"
+            return f"non raggiungibile ({exc.reason})"
+        except (TimeoutError, OSError) as exc:
+            return f"nessuna risposta ({exc.__class__.__name__})"
+        except ValueError:
+            return "risponde, ma non e' un DSM"
+
+    # ---------------------------------------------------------------- HTTP
+
+    def _ssl_context(self, verify=True):
+        ctx = ssl.create_default_context()
+        bundle = cfg("NAS_CA_BUNDLE")
+        if bundle:
+            ctx.load_verify_locations(cafile=bundle)
+        if not bundle and not ctx.cert_store_stats().get("x509_ca"):
+            # Un Python senza CA di sistema fallisce OGNI verifica, anche verso
+            # host con certificato validissimo: succede con i build python.org
+            # su macOS finche' non si esegue "Install Certificates.command".
+            # certifi, se c'e', risolve senza toccare nulla.
+            try:
+                import certifi
+
+                ctx.load_verify_locations(cafile=certifi.where())
+            except Exception:
+                self.no_ca_store = True
+        if not verify:
+            ctx.check_hostname = False
+            ctx.verify_mode = ssl.CERT_NONE
+        return ctx
+
+    def _opener(self, host, ctx):
+        """Un indirizzo locale o Tailscale non deve passare dal proxy di
+        sistema del Mac (PAC aziendale, VPN): urllib lo userebbe anche per
+        192.168.x, e la richiesta finirebbe da tutt'altra parte. Un indirizzo
+        pubblico invece lo segue, ed e' cosi' che nel cloud si esce."""
+        proxy = urllib.request.ProxyHandler({}) if is_local_host(host) else urllib.request.ProxyHandler()
+        return urllib.request.build_opener(proxy, urllib.request.HTTPSHandler(context=ctx))
+
+    def _http(self, endpoint, params=None, body=None, headers=None, raw=False):
+        url = f"{self.base}/webapi/{endpoint}"
+        if params:
+            url += "?" + urllib.parse.urlencode(params, doseq=True)
+        req = urllib.request.Request(url, data=body, method="POST" if body else "GET")
+        req.add_header("User-Agent", "nas-synology-skill/1.0")
+        for key, value in (headers or {}).items():
+            req.add_header(key, value)
+        if self._token:
+            req.add_header("X-SYNO-TOKEN", self._token)
+        try:
+            with self._opener(self.host, self._ctx).open(req, timeout=self.timeout) as resp:
+                payload = resp.read()
+                content_type = resp.headers.get("Content-Type", "")
+        except urllib.error.HTTPError as exc:
+            if ".quickconnect." in self.host:
+                raise NasError(
+                    f"il relay QuickConnect risponde (HTTP {exc.code}) ma il NAS dietro "
+                    "non c'e': probabilmente e' spento, scollegato, o QuickConnect e' "
+                    "disattivato in DSM (Pannello di controllo > Accesso esterno).",
+                    fatal=True,
+                )
+            raise NasError(f"HTTP {exc.code} da {self.host}: {exc.reason}", fatal=True)
+        except urllib.error.URLError as exc:
+            # urlopen incapsula gli errori TLS qui dentro: intercettarli prima,
+            # altrimenti un problema di certificato si travestirebbe da problema
+            # di rete e manderebbe a cercare la causa dalla parte sbagliata.
+            if isinstance(exc.reason, ssl.SSLError):
+                raise NasError(self._tls_hint(exc.reason), fatal=True)
+            negato = proxy_denial(self.host) if self.env == "cloud" else None
+            if negato:
+                raise NasError(
+                    f"il dominio {self.host} non e' ammesso dalla network policy di "
+                    f"questo environment cloud ({negato}). Su claude.ai/code apri le "
+                    "impostazioni dell'environment, sezione Network, e aggiungi "
+                    f"{self.host} ai domini permessi; poi riapri la sessione. "
+                    "'nas cloud' stampa la ricetta completa.",
+                    fatal=True,
+                )
+            raise NasError(
+                f"impossibile raggiungere {self.host}: {exc.reason}. "
+                + ("In una sessione cloud il NAS deve essere raggiungibile da Internet "
+                   "e il suo dominio ammesso dalla network policy dell'environment."
+                   if self.env == "cloud" else
+                   "Controlla che il NAS sia acceso e che tu sia in casa o con Tailscale attivo."),
+                fatal=True,
+            )
+        except (TimeoutError, socket.timeout):
+            # (socket.timeout e' un alias di TimeoutError solo da Python 3.10:
+            # il python3 di Xcode e' 3.9.) Il timeout di lettura scatta dopo
+            # che la connessione e' riuscita,
+            # quindi non passa da URLError e senza questo ramo uscirebbe come
+            # traceback. Le due cause vere sono un NAS sotto carico e il relay
+            # QuickConnect, che aggiunge latenza a ogni richiesta.
+            raise NasError(
+                f"{self.host} ha accettato la connessione ma non ha risposto entro "
+                f"{self.timeout} secondi. Succede quando il NAS e' sotto carico "
+                "(guarda 'nas usage': dischi al 100% rallentano anche le API) o "
+                "quando si passa da un relay QuickConnect. Riprova con piu' tempo: "
+                f"NAS_TIMEOUT={max(90, self.timeout * 3)} davanti al comando, oppure "
+                "nella configurazione.",
+                fatal=True,
+            )
+        except OSError as exc:
+            raise NasError(
+                f"errore di rete verso {self.host}: {exc}", fatal=True
+            )
+        if raw and "application/json" not in content_type:
+            return payload
+        try:
+            return json.loads(payload.decode("utf-8"))
+        except ValueError:
+            if raw:
+                return payload
+            if ".quickconnect." in self.host:
+                raise NasError(
+                    "il relay QuickConnect ha risposto con una pagina, non con l'API: "
+                    "di solito e' il NAS spento o scollegato, e il relay mostra la sua "
+                    "pagina di attesa.", fatal=True,
+                )
+            raise NasError("risposta non JSON dal NAS (URL o porta sbagliati?)", fatal=True)
+
+    def _tls_hint(self, reason):
+        detail = (
+            getattr(reason, "reason", None)
+            or getattr(reason, "verify_message", None)
+            or (reason.args[0] if getattr(reason, "args", None) else str(reason))
+        )
+        if self.no_ca_store:
+            return (
+                f"verifica TLS fallita ({detail}), ma la causa non e' il NAS: questo "
+                "Python non ha nessun certificato di autorita' caricato, quindi "
+                "rifiuterebbe qualunque sito. Su macOS si risolve una volta sola "
+                "eseguendo Install Certificates.command dalla cartella di Python "
+                "(Applicazioni > Python 3.x), oppure con: pip3 install --upgrade certifi"
+            )
+        return (
+            f"certificato TLS non verificabile ({detail}). Se il NAS ha ancora il "
+            "certificato autofirmato di DSM, in ordine di preferenza: 1) installa un "
+            "certificato Let's Encrypt in DSM (Pannello di controllo > Sicurezza > "
+            "Certificato); 2) esporta il certificato del NAS e punta NAS_CA_BUNDLE al "
+            "file; 3) solo su LAN fidata, NAS_VERIFY_TLS=no nella configurazione."
+        )
+
+    # ------------------------------------------------------------- catalogo
+
+    def api_info(self, refresh=False):
+        if self._info is not None:
+            return self._info
+        cached = None if refresh else read_json(APIINFO_FILE)
+        if cached and time.time() - cached.get("_fetched", 0) < APIINFO_TTL:
+            if cached.get("_host") == self.host:
+                self._info = cached["apis"]
+                return self._info
+        resp = self._http(
+            "query.cgi",
+            {"api": "SYNO.API.Info", "version": 1, "method": "query", "query": "all"},
+        )
+        if not resp.get("success"):
+            raise NasError(
+                "SYNO.API.Info non risponde: URL o porta non sono di un DSM", fatal=True
+            )
+        self._info = resp["data"]
+        write_json(
+            APIINFO_FILE,
+            {"_fetched": time.time(), "_host": self.host, "apis": self._info},
+        )
+        return self._info
+
+    def resolve(self, api, version=None):
+        """Path e versione reali dell'API su questo DSM."""
+        entry = self.api_info().get(api)
+        if not entry:
+            raise NasError(
+                f"{api} non esiste su questo DSM. Cerca l'API giusta con: "
+                f"nas api list {api.split('.')[-1]}"
+            )
+        lo = int(entry.get("minVersion", 1))
+        hi = int(entry.get("maxVersion", 1))
+        chosen = hi if version is None else max(lo, min(int(version), hi))
+        return entry["path"], chosen
+
+    # ------------------------------------------------------------ sessione
+
+    def _load_session(self):
+        data = read_json(SESSION_FILE) or {}
+        if data.get("host") == self.host and data.get("user") == self.user:
+            self._sid = data.get("sid")
+            self._token = data.get("token")
+            return data
+        return {}
+
+    def login(self, force=False):
+        if self.login_fallito:
+            # Ritentare con le stesse credenziali sbagliate non le rende giuste,
+            # e sei tentativi di fila fanno scattare l'Auto Block di DSM, che
+            # poi blocca l'IP anche con la password corretta.
+            raise NasError(self.login_fallito, fatal=True)
+        if not force:
+            self._load_session()
+            if self._sid:
+                return self._sid
+        password = cfg("NAS_PASS", required=True)
+        _, version = self.resolve("SYNO.API.Auth")
+        params = {
+            "api": "SYNO.API.Auth",
+            "version": version,
+            "method": "login",
+            "account": self.user,
+            "passwd": password,
+            "session": "nas-skill",
+            "format": "sid",
+            "enable_syno_token": "yes",
+        }
+        # Il device token vive in un file suo: la sessione viene cancellata e
+        # rifatta di continuo (SID scaduto, logout), il token no. Tenerlo nel
+        # file di sessione lo faceva sparire a ogni ritentativo, e ogni login
+        # tornava all'OTP registrando un nuovo dispositivo su DSM.
+        dispositivo = read_json(DEVICE_FILE) or {}
+        device_id = os.environ.get("NAS_DEVICE_ID") or (
+            dispositivo.get("device_id")
+            if dispositivo.get("host") == self.host and dispositivo.get("user") == self.user
+            else None
+        )
+        secret = cfg("NAS_OTP_SECRET")
+        code = cfg("NAS_OTP_CODE")
+        # Il device token ricevuto al primo login con OTP vale per i successivi:
+        # si usa quello, e si ricorre al codice solo se DSM lo rifiuta. Prima il
+        # codice veniva rigenerato a ogni login e DSM registrava ogni volta un
+        # nuovo "dispositivo attendibile".
+        # In POST, con le credenziali nel corpo: una GET le metterebbe nell'URL,
+        # che finisce nei log di ogni proxy sulla strada (quello del cloud
+        # compreso) e nella cronologia di chi guarda il traffico.
+        def posta(campi):
+            return self._http(
+                "entry.cgi",
+                body=urllib.parse.urlencode(campi).encode("utf-8"),
+                headers={"Content-Type": "application/x-www-form-urlencoded"},
+            )
+
+        self._token = None
+        resp = None
+        if device_id and not code:
+            resp = posta({**params, "device_id": device_id})
+            if not resp.get("success") and resp.get("error", {}).get("code") in (403, 404, 406):
+                resp = None
+        if resp is None:
+            if code:
+                params["otp_code"] = code
+            elif secret:
+                params["otp_code"] = totp(secret)
+            if params.get("otp_code"):
+                params["enable_device_token"] = "yes"
+                params["device_name"] = cfg("NAS_DEVICE_NAME", "claude-nas-skill")
+            resp = posta(params)
+        if not resp.get("success"):
+            code_num = resp.get("error", {}).get("code")
+            hint = AUTH_ERRORS.get(code_num, COMMON_ERRORS.get(code_num, "errore sconosciuto"))
+            extra = ""
+            if code_num == 403:
+                extra = (
+                    " Imposta NAS_OTP_SECRET con il segreto base32 della 2FA, "
+                    "oppure NAS_OTP_CODE con un codice valido per questo comando."
+                )
+            if code_num == 402:
+                extra = (
+                    " Alcune API di sistema richiedono un utente del gruppo administrators; "
+                    "vedi references/setup.md per i permessi minimi."
+                )
+            if code_num in (400, 401, 402, 404, 407, 408, 409, 410):
+                self.login_fallito = f"login fallito ({code_num}): {hint}.{extra}"
+            raise NasError(f"login fallito ({code_num}): {hint}.{extra}", fatal=True)
+        data = resp.get("data", {})
+        self._sid = data.get("sid")
+        self._token = data.get("synotoken")
+        write_json(
+            SESSION_FILE,
+            {"host": self.host, "user": self.user, "sid": self._sid,
+             "token": self._token, "created": time.time()},
+            private=True,
+        )
+        nuovo_device = data.get("did") or data.get("device_id")
+        if nuovo_device and nuovo_device != device_id:
+            write_json(
+                DEVICE_FILE,
+                {"host": self.host, "user": self.user, "device_id": nuovo_device,
+                 "created": time.time()},
+                private=True,
+            )
+        return self._sid
+
+    def logout(self):
+        if not self._load_session().get("sid"):
+            return False
+        try:
+            _, version = self.resolve("SYNO.API.Auth")
+            self._http(
+                "entry.cgi",
+                {
+                    "api": "SYNO.API.Auth",
+                    "version": version,
+                    "method": "logout",
+                    "session": "nas-skill",
+                    "_sid": self._sid,
+                },
+            )
+        except NasError:
+            pass
+        SESSION_FILE.unlink(missing_ok=True)
+        DEVICE_FILE.unlink(missing_ok=True)
+        self._sid = self._token = None
+        return True
+
+    # ------------------------------------------------------------ chiamate
+
+    def call(self, api, method, version=None, params=None, raw=False, _retry=True):
+        self.login()
+        path, resolved = self.resolve(api, version)
+        query = {"api": api, "version": resolved, "method": method, "_sid": self._sid}
+        for key, value in (params or {}).items():
+            if value is None:
+                continue
+            query[key] = json.dumps(value) if isinstance(value, (list, dict, bool)) else value
+        resp = self._http(path, query, raw=raw)
+        if isinstance(resp, bytes):
+            return resp
+        if resp.get("success"):
+            return resp.get("data", {})
+        code = resp.get("error", {}).get("code")
+        if code in (106, 107, 119) and _retry:
+            SESSION_FILE.unlink(missing_ok=True)
+            self._sid = self._token = None
+            self.login(force=True)
+            return self.call(api, method, version, params, raw, _retry=False)
+        if code in (102, 103, 104) and _retry and APIINFO_FILE.exists():
+            # Il catalogo e' in cache 24 ore: dopo un aggiornamento DSM un'API
+            # puo' essere sparita o cambiata versione. Si ricarica una volta.
+            APIINFO_FILE.unlink(missing_ok=True)
+            self._info = None
+            return self.call(api, method, version, params, raw, _retry=False)
+        table = FS_ERRORS if api.startswith("SYNO.FileStation") else {}
+        hint = table.get(code) or COMMON_ERRORS.get(code) or AUTH_ERRORS.get(code) or "errore"
+        details = resp.get("error", {}).get("errors")
+        suffix = f" - {json.dumps(details, ensure_ascii=False)}" if details else ""
+        raise NasError(f"{api}.{method} fallita (codice {code}): {hint}{suffix}")
+
+    def first(self, candidates, label):
+        """Prova piu' API alternative: DSM cambia nomi e versioni fra le release."""
+        problems = []
+        for api, method, version, params in candidates:
+            try:
+                return api, self.call(api, method, version, params)
+            except NasError as exc:
+                if exc.fatal:
+                    raise
+                problems.append(f"  {api}.{method}: {exc}")
+        raise NasError(
+            f"nessuna API disponibile per {label} su questo DSM.\n"
+            + "\n".join(problems)
+            + f"\nCerca quella giusta con: nas api list {label}"
+        )
+
+    def guard(self, confirmed, what):
+        if self.readonly:
+            die(f"NAS_READONLY e' attivo: '{what}' non viene eseguita.", 2)
+        if not confirmed:
+            die(f"'{what}' modifica il NAS. Ripeti il comando con --yes per eseguirla.", 2)
+
+
+# ------------------------------------------------------------------ SSH
+
+
+class SSH:
+    """Trasporto shell, disponibile solo dove il NAS e' raggiungibile via SSH."""
+
+    def __init__(self):
+        # NAS_SSH_HOST va dichiarato: dedurlo da NAS_URL sembra comodo ma e'
+        # sbagliato. L'indirizzo web e' spesso un DDNS pubblico, e la porta 22
+        # di casa non deve essere ne' aperta ne' tentata; senza questa
+        # distinzione "SSH disponibile" sarebbe sempre vero e ogni comando
+        # finirebbe in un timeout invece che in un messaggio utile.
+        self.host = cfg("NAS_SSH_HOST")
+        self.user = cfg("NAS_SSH_USER", cfg("NAS_USER"))
+        self.port = cfg("NAS_SSH_PORT", "22")
+        self.key = cfg("NAS_SSH_KEY")
+
+    def available(self):
+        return bool(self.host and self.user and shutil.which("ssh"))
+
+    def run(self, command, check=True):
+        if not self.available():
+            missing = "NAS_SSH_HOST" if not self.host else (
+                "NAS_SSH_USER" if not self.user else "il comando ssh")
+            raise NasError(
+                f"SSH non configurato: manca {missing}. Rilancia nas-setup.sh e "
+                "rispondi si' alla domanda su SSH, oppure aggiungi NAS_SSH_HOST "
+                "alla configurazione. Dalle sessioni cloud e dal cellulare il NAS "
+                "non e' raggiungibile via SSH: usa i comandi basati su API."
+            )
+        argv = [
+            "ssh",
+            "-o", "BatchMode=yes",
+            "-o", "ConnectTimeout=10",
+            "-o", "StrictHostKeyChecking=accept-new",
+            "-p", str(self.port),
+        ]
+        if self.key:
+            argv += ["-i", os.path.expanduser(self.key)]
+        argv += [f"{self.user}@{self.host}", command]
+        proc = subprocess.run(argv, capture_output=True, text=True)
+        if proc.returncode == 255:
+            # 255 e' ssh stesso che non e' riuscito a collegarsi, non il comando
+            # remoto che fallisce: le cause sono poche e vale la pena dirle.
+            raise NasError(
+                f"non riesco a collegarmi via SSH a {self.user}@{self.host}:{self.port} "
+                f"({proc.stderr.strip().splitlines()[-1] if proc.stderr.strip() else 'nessun dettaglio'}). "
+                "Controlla che SSH sia attivo in DSM (Pannello di controllo > Terminale "
+                "e SNMP), che tu sia sulla stessa rete del NAS o in VPN, e che la chiave "
+                "in NAS_SSH_KEY sia installata sul NAS."
+            )
+        if check and proc.returncode != 0:
+            raise NasError(
+                f"comando SSH fallito (exit {proc.returncode}): "
+                f"{proc.stderr.strip() or proc.stdout.strip()}"
+            )
+        return proc
+
+
+# ------------------------------------------------------------- formattazione
+
+
+def human_bytes(value):
+    try:
+        size = float(value)
+    except (TypeError, ValueError):
+        return "-"
+    for unit in ("B", "KB", "MB", "GB", "TB", "PB"):
+        if abs(size) < 1024 or unit == "PB":
+            return f"{size:.1f} {unit}" if unit != "B" else f"{int(size)} B"
+        size /= 1024
+    return "-"
+
+
+def human_time(value):
+    """DSM restituisce l'uptime a volte in secondi, a volte come "HH:MM:SS"
+    (con le ore che superano le 24) e a volte con i giorni scritti a parole."""
+    if value is None:
+        return "-"
+    if isinstance(value, str) and ":" in value:
+        parts = value.replace(",", " ").split()
+        days = 0
+        clock = parts[-1]
+        for i, part in enumerate(parts[:-1]):
+            if part.isdigit() and i + 1 < len(parts) and parts[i + 1].lower().startswith(("day", "giorn")):
+                days = int(part)
+        try:
+            chunks = [int(c) for c in clock.split(":")]
+        except ValueError:
+            return str(value)
+        while len(chunks) < 3:
+            chunks.append(0)
+        value = days * 86400 + chunks[0] * 3600 + chunks[1] * 60 + chunks[2]
+    try:
+        seconds = int(float(value))
+    except (TypeError, ValueError):
+        return "-"
+    days, rem = divmod(seconds, 86400)
+    hours, rem = divmod(rem, 3600)
+    return f"{days}g {hours}h {rem // 60}m"
+
+
+def dig(data, *keys, default=None):
+    for key in keys:
+        if isinstance(data, dict) and key in data:
+            data = data[key]
+        else:
+            return default
+    return data
+
+
+def table(rows, headers):
+    if not rows:
+        return "  (nessun elemento)"
+    cols = [str(h) for h in headers]
+    widths = [len(c) for c in cols]
+    text_rows = []
+    for row in rows:
+        cells = ["-" if c is None else str(c) for c in row]
+        text_rows.append(cells)
+        for i, cell in enumerate(cells):
+            widths[i] = max(widths[i], len(cell))
+    out = ["  " + "  ".join(c.ljust(widths[i]) for i, c in enumerate(cols))]
+    out.append("  " + "  ".join("-" * w for w in widths))
+    for cells in text_rows:
+        out.append("  " + "  ".join(c.ljust(widths[i]) for i, c in enumerate(cells)))
+    return "\n".join(out)
+
+
+def emit(args, data, renderer):
+    if getattr(args, "json", False):
+        print(json.dumps(data, indent=2, ensure_ascii=False))
+    else:
+        renderer(data)
+
+
+# ------------------------------------------------------- API alternative
+# DSM cambia nomi e versioni fra le release: ogni voce e' un tentativo in
+# ordine di preferenza. `nas api list <parola>` scopre cosa c'e' davvero.
+
+CANDIDATES = {
+    "system": [("SYNO.Core.System", "info", None, {})],
+    "usage": [
+        ("SYNO.Core.System.Utilization", "get", None,
+         {"type": "current", "resource": ["cpu", "memory", "network", "disk"]}),
+    ],
+    "storage": [
+        ("SYNO.Storage.CGI.Storage", "load_info", 1, {}),
+        ("SYNO.Core.Storage.Volume", "list", None, {"limit": -1, "offset": 0}),
+    ],
+    "shares": [
+        ("SYNO.Core.Share", "list", None,
+         {"shareType": "all", "additional": ["hidden", "encryption", "share_quota", "enable_recycle_bin"]}),
+        ("SYNO.FileStation.List", "list_share", None,
+         {"additional": ["real_path", "owner", "volume_status"]}),
+    ],
+    "packages": [
+        ("SYNO.Core.Package", "list", None,
+         {"additional": ["status", "description", "startable", "install_type"]}),
+        ("SYNO.Core.Package", "list", None, {"additional": ["status", "description"]}),
+    ],
+    "package-updates": [
+        ("SYNO.Core.Package.Server", "list", None, {"blforcereload": False, "blloadothers": False}),
+    ],
+    "services": [
+        ("SYNO.Core.Service", "list", None, {"additional": ["is_enabled", "status"]}),
+    ],
+    "users": [
+        ("SYNO.Core.User", "list", None,
+         {"type": "local", "additional": ["email", "description", "expired"]}),
+    ],
+    "groups": [("SYNO.Core.Group", "list", None, {})],
+    "connections": [("SYNO.Core.CurrentConnection", "list", None, {})],
+    "dsm-update": [
+        ("SYNO.Core.Upgrade.Server", "check", None, {}),
+        ("SYNO.Core.Upgrade", "status", None, {}),
+    ],
+    "security": [("SYNO.Core.SecurityScan.Status", "system_get", None, {})],
+    "backups": [
+        ("SYNO.Backup.Task", "list", None,
+         {"additional": ["last_bkp_time", "next_bkp_time", "last_bkp_result"]}),
+        ("SYNO.SDS.Backup.Client.Common.Task", "list", None, {}),
+    ],
+    "tasks": [
+        ("SYNO.Core.TaskScheduler", "list", None,
+         {"offset": 0, "limit": -1, "additional": ["next_trigger_time"]}),
+    ],
+    "docker": [
+        ("SYNO.Docker.Container", "list", None, {"limit": -1, "offset": 0, "type": "all"}),
+    ],
+    "logs": [
+        ("SYNO.Core.SyslogClient.Log", "list", None, {"start": 0, "limit": 50}),
+        ("SYNO.Core.SysLog", "list", None, {"start": 0, "limit": 50}),
+    ],
+}
+
+
+def fetch(dsm, key):
+    return dsm.first(CANDIDATES[key], key)[1]
+
+
+def rows_of(data, *keys):
+    """Estrae la lista di elementi da una risposta DSM, qualunque chiave usi."""
+    if isinstance(data, list):
+        return data
+    for key in keys:
+        value = dig(data, key)
+        if isinstance(value, list):
+            return value
+    for value in (data or {}).values():
+        if isinstance(value, list) and value and isinstance(value[0], dict):
+            return value
+    return []
+
+
+# --------------------------------------------------------------- FileStation
+
+
+def poll_task(dsm, api, taskid, label):
+    for _ in range(600):
+        status = dsm.call(api, "status", params={"taskid": taskid})
+        if status.get("finished") or status.get("finish"):
+            errors = status.get("errors") or []
+            if errors:
+                raise NasError(f"{label} conclusa con errori: {json.dumps(errors, ensure_ascii=False)}")
+            return status
+        time.sleep(0.5)
+    raise NasError(f"{label} ancora in corso dopo 5 minuti; controlla su DSM")
+
+
+def fs_upload(dsm, local, dest_folder, overwrite=False, _retry=True):
+    local = Path(local).expanduser()
+    if not local.is_file():
+        raise NasError(f"file locale inesistente: {local}")
+    size = local.stat().st_size
+    limit = int(cfg("NAS_UPLOAD_LIMIT_MB", "256")) * 1024 * 1024
+    if size > limit:
+        raise NasError(
+            f"{local.name} pesa {human_bytes(size)}: l'upload via API tiene il file in "
+            f"memoria. Oltre {human_bytes(limit)} usa rsync/scp dal Mac "
+            f"(vedi references/ssh-playbook.md) oppure alza NAS_UPLOAD_LIMIT_MB."
+        )
+    dsm.login()
+    path, version = dsm.resolve("SYNO.FileStation.Upload")
+    boundary = "----nas" + uuid.uuid4().hex
+    fields = {
+        "api": "SYNO.FileStation.Upload",
+        "version": str(version),
+        "method": "upload",
+        "path": dest_folder,
+        "create_parents": "true",
+        "overwrite": "true" if overwrite else "false",
+    }
+    body = b""
+    for key, value in fields.items():
+        body += (
+            f"--{boundary}\r\nContent-Disposition: form-data; name=\"{key}\"\r\n\r\n{value}\r\n"
+        ).encode()
+    body += (
+        f"--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; "
+        f"filename=\"{local.name}\"\r\nContent-Type: application/octet-stream\r\n\r\n"
+    ).encode()
+    body += local.read_bytes() + f"\r\n--{boundary}--\r\n".encode()
+    # api/version/method vanno nel corpo multipart, come da guida File Station,
+    # ma diverse versioni di DSM li leggono solo dalla query string: passarli in
+    # entrambi i posti con gli stessi valori e' l'unica forma che funziona
+    # ovunque, e la duplicazione e' innocua.
+    resp = dsm._http(
+        path,
+        {
+            "api": "SYNO.FileStation.Upload",
+            "version": version,
+            "method": "upload",
+            "_sid": dsm._sid,
+        },
+        body=body,
+        headers={"Content-Type": f"multipart/form-data; boundary={boundary}"},
+    )
+    if not resp.get("success"):
+        code = dig(resp, "error", "code")
+        if code in (106, 107, 119) and _retry:
+            SESSION_FILE.unlink(missing_ok=True)
+            dsm._sid = dsm._token = None
+            dsm.login(force=True)
+            return fs_upload(dsm, local, dest_folder, overwrite, _retry=False)
+        raise NasError(f"upload fallito (codice {code}): {FS_ERRORS.get(code, COMMON_ERRORS.get(code, 'errore'))}")
+    return f"{dest_folder}/{local.name}"
+
+
+# ------------------------------------------------------------------ comandi
+
+
+def cmd_check(dsm, args):
+    report = {"ambiente": dsm.env, "url": dsm.base, "user": dsm.user,
+              "tls_verify": dsm.verify, "tentativi": dsm.tentativi}
+    print(f"Ambiente {dsm.env}" + ("  (sessione cloud: solo API, niente LAN ne' SSH)" if dsm.env == "cloud" else ""))
+    for url, esito in dsm.tentativi:
+        if esito != "ok":
+            print(f"         {url}: {esito}")
+    print(f"NAS      {dsm.base}  (utente {dsm.user})"
+          + ("" if dsm.verify else "  [certificato non verificato: host locale]"))
+    apis = dsm.api_info(refresh=True)
+    report["api_count"] = len(apis)
+    print(f"API      catalogo raggiungibile, {len(apis)} API esposte")
+    dsm.login(force=True)
+    print("Login    riuscito" + (" (2FA)" if cfg("NAS_OTP_SECRET") or cfg("NAS_OTP_CODE") else ""))
+    try:
+        info = fetch(dsm, "system")
+        report["model"] = info.get("model")
+        report["dsm"] = info.get("firmware_ver") or info.get("version_string")
+        print(f"Modello  {info.get('model', '?')}   DSM {report['dsm'] or '?'}")
+    except NasError as exc:
+        print(f"Sistema  non leggibile: {exc}")
+        report["system_error"] = str(exc)
+    ssh = SSH()
+    if ssh.available():
+        try:
+            out = ssh.run("uname -a").stdout.strip()
+            print(f"SSH      ok -> {out}")
+            report["ssh"] = "ok"
+        except NasError as exc:
+            print(f"SSH      configurato ma non raggiungibile: {exc}")
+            report["ssh"] = "ko"
+    else:
+        print("SSH      non configurato (normale nelle sessioni cloud e da cellulare)")
+        report["ssh"] = "assente"
+    if args.json:
+        print(json.dumps(report, indent=2, ensure_ascii=False))
+
+
+def cmd_info(dsm, args):
+    data = fetch(dsm, "system")
+
+    def show(d):
+        print(f"Modello        {d.get('model', '-')}")
+        print(f"DSM            {d.get('firmware_ver') or d.get('version_string', '-')}")
+        print(f"Seriale        {d.get('serial', '-')}")
+        print(f"Uptime         {human_time(d.get('up_time') or d.get('uptime'))}")
+        temp = d.get("sys_temp")
+        if temp is not None:
+            print(f"Temperatura    {temp} C" + ("  ATTENZIONE" if isinstance(temp, int) and temp >= 60 else ""))
+        print(f"RAM            {d.get('ram_size', '-')} MB")
+        if d.get("cpu_clock_speed"):
+            print(f"CPU            {d.get('cpu_series', '')} {d.get('cpu_clock_speed')} MHz x{d.get('cpu_cores', '?')}")
+        if d.get("ntp_server"):
+            print(f"NTP            {d['ntp_server']}")
+
+    emit(args, data, show)
+
+
+def cmd_usage(dsm, args):
+    data = fetch(dsm, "usage")
+
+    def show(d):
+        cpu = d.get("cpu", {})
+        mem = d.get("memory", {})
+        load = cpu.get("user_load", 0) + cpu.get("system_load", 0)
+        print(f"CPU            {load}%  (utente {cpu.get('user_load', '-')}%, sistema {cpu.get('system_load', '-')}%)")
+        if mem:
+            total = mem.get("memory_size") or 0
+            used = mem.get("real_usage")
+            print(f"RAM            {used if used is not None else '-'}% di {human_bytes(total * 1024)}")
+        net = d.get("network") or []
+        for iface in net[:4]:
+            print(
+                f"Rete {iface.get('device', '?'):<9} down {human_bytes(iface.get('rx', 0))}/s   "
+                f"up {human_bytes(iface.get('tx', 0))}/s"
+            )
+        disks = d.get("disk", {}).get("disk") or []
+        for disk in disks[:8]:
+            print(
+                f"Disco {disk.get('device', '?'):<8} utilizzo {disk.get('utilization', '-')}%  "
+                f"lettura {human_bytes(disk.get('read_byte', 0))}/s  scrittura {human_bytes(disk.get('write_byte', 0))}/s"
+            )
+
+    emit(args, data, show)
+
+
+def cmd_storage(dsm, args):
+    data = fetch(dsm, "storage")
+
+    def show(d):
+        volumes = rows_of(d, "volumes", "vol_info")
+        rows = []
+        for vol in volumes:
+            total = dig(vol, "size", "total") or vol.get("size_total")
+            used = dig(vol, "size", "used") or vol.get("size_used")
+            try:
+                pct = f"{100 * float(used) / float(total):.0f}%"
+                free = human_bytes(float(total) - float(used))
+            except (TypeError, ValueError, ZeroDivisionError):
+                pct, free = "-", "-"
+            rows.append([
+                vol.get("display_name") or vol.get("id"),
+                vol.get("fs_type") or vol.get("filesystem", "-"),
+                human_bytes(total), pct, free,
+                vol.get("status", "-"),
+            ])
+        print("Volumi")
+        print(table(rows, ["volume", "fs", "totale", "usato", "libero", "stato"]))
+        disks = rows_of(d, "disks", "disk_info")
+        if disks:
+            rows = [[
+                disk.get("id") or disk.get("name"),
+                disk.get("model", "-"),
+                human_bytes(disk.get("size_total")),
+                f"{disk.get('temp', '-')} C",
+                disk.get("smart_status") or disk.get("smart_test_status", "-"),
+                disk.get("status", "-"),
+            ] for disk in disks]
+            print("\nDischi")
+            print(table(rows, ["disco", "modello", "capacita", "temp", "SMART", "stato"]))
+        pools = rows_of(d, "storagePools", "pools")
+        if pools:
+            rows = [[
+                pool.get("id"), pool.get("raid_type") or pool.get("raidType", "-"),
+                human_bytes(dig(pool, "size", "total")), pool.get("status", "-"),
+            ] for pool in pools]
+            print("\nGruppi di archiviazione")
+            print(table(rows, ["pool", "RAID", "totale", "stato"]))
+
+    emit(args, data, show)
+
+
+def cmd_health(dsm, args):
+    report = {}
+    print("=== Stato del NAS ===\n")
+    for label, key, renderer in (
+        ("Sistema", "system", cmd_info),
+        ("Archiviazione", "storage", cmd_storage),
+        ("Carico", "usage", cmd_usage),
+    ):
+        print(f"--- {label} ---")
+        try:
+            renderer(dsm, argparse.Namespace(json=False))
+            report[key] = "ok"
+        except NasError as exc:
+            if exc.fatal:
+                raise    # rete o credenziali: le altre sezioni fallirebbero uguale
+            print(f"  non disponibile: {exc}")
+            report[key] = str(exc)
+        print()
+    for label, key, renderer in (
+        ("Aggiornamenti DSM", "dsm-update", cmd_updates),
+        ("Sicurezza", "security", cmd_security),
+        ("Backup", "backups", cmd_backups),
+    ):
+        print(f"--- {label} ---")
+        try:
+            renderer(dsm, argparse.Namespace(json=False))
+            report[key] = "ok"
+        except NasError as exc:
+            if exc.fatal:
+                raise
+            # Solo la prima riga: l'elenco delle API tentate serve a chi indaga,
+            # non a chi sta leggendo il rapporto sullo stato del NAS.
+            print(f"  non disponibile: {str(exc).splitlines()[0]}")
+            if key == "backups":
+                print("  (se Hyper Backup non e' installato e' normale: nas packages)")
+            report[key] = str(exc)
+        print()
+    if args.json:
+        print(json.dumps(report, indent=2, ensure_ascii=False, default=str))
+
+
+def _simple_list(key, headers, extract):
+    def command(dsm, args):
+        data = fetch(dsm, key)
+        emit(args, data, lambda d: print(table([extract(x) for x in rows_of(d)], headers)))
+    return command
+
+
+cmd_shares = _simple_list(
+    "shares", ["condivisione", "percorso", "descrizione"],
+    lambda s: [s.get("name"), s.get("vol_path") or s.get("path", "-"), s.get("desc", "")],
+)
+cmd_users = _simple_list(
+    "users", ["utente", "email", "descrizione", "scaduto"],
+    lambda u: [u.get("name"), u.get("email", ""), u.get("description", ""), u.get("expired", "")],
+)
+cmd_groups = _simple_list(
+    "groups", ["gruppo", "descrizione"], lambda g: [g.get("name"), g.get("description", "")],
+)
+cmd_connections = _simple_list(
+    "connections", ["utente", "da", "servizio", "dal"],
+    lambda c: [c.get("who"), c.get("from"), c.get("type"), c.get("time")],
+)
+cmd_tasks = _simple_list(
+    "tasks", ["task", "tipo", "attivo", "prossima esecuzione"],
+    lambda t: [t.get("name"), t.get("type"), t.get("enable"),
+               dig(t, "additional", "next_trigger_time", default="-")],
+)
+cmd_docker = _simple_list(
+    "docker", ["container", "immagine", "stato", "RAM"],
+    lambda c: [c.get("name"), c.get("image"), c.get("status"), human_bytes(c.get("mem_limit"))],
+)
+cmd_services = _simple_list(
+    "services", ["servizio", "attivo"],
+    lambda s: [s.get("display_name") or s.get("service"), s.get("enable_status") or s.get("status")],
+)
+cmd_backups = _simple_list(
+    "backups", ["task", "stato", "ultimo backup", "esito"],
+    lambda b: [b.get("name"), b.get("status"),
+               dig(b, "additional", "last_bkp_time", default=b.get("last_bkp_time", "-")),
+               dig(b, "additional", "last_bkp_result", default=b.get("last_bkp_result", "-"))],
+)
+
+
+def campo(pacchetto, *nomi):
+    """DSM mette i campi richiesti con `additional` a volte al primo livello e
+    a volte annidati sotto `additional`: cambia con la versione. Cercare in
+    entrambi i posti evita colonne vuote che sembrano dati mancanti."""
+    for nome in nomi:
+        valore = pacchetto.get(nome)
+        if valore in (None, ""):
+            valore = dig(pacchetto, "additional", nome)
+        if valore not in (None, ""):
+            return valore
+    return None
+
+
+def cmd_packages(dsm, args):
+    data = fetch(dsm, "packages")
+
+    def show(d):
+        rows = []
+        for pkg in rows_of(d, "packages"):
+            stato = campo(pkg, "status", "install_status", "additional_status")
+            avviabile = campo(pkg, "startable")
+            if stato is None and avviabile is not None:
+                stato = "avviabile" if avviabile else "servizio"
+            rows.append([
+                campo(pkg, "id", "name"),
+                campo(pkg, "version"),
+                stato or "installato",
+                (campo(pkg, "description", "desc") or "")[:44],
+            ])
+        print(table(sorted(rows, key=lambda r: str(r[0]).lower()),
+                    ["pacchetto", "versione", "stato", "descrizione"]))
+        print(f"\n  {len(rows)} pacchetti installati")
+
+    emit(args, data, show)
+
+
+def cmd_updates(dsm, args):
+    data = fetch(dsm, "dsm-update")
+
+    def show(d):
+        upd = d.get("update") if isinstance(d.get("update"), dict) else d
+        if not upd.get("available"):
+            print("Nessun aggiornamento DSM disponibile.")
+            return
+        details = upd.get("version_details") or {}
+        print(f"Disponibile    {upd.get('version') or details.get('os_name', '?')}")
+        if details.get("isSecurityVersion"):
+            print("               aggiornamento di SICUREZZA: da fare presto")
+        reboot = upd.get("reboot")
+        if reboot and reboot != "none":
+            print(f"Riavvio        richiesto ({reboot})")
+        restart = upd.get("restart")
+        if restart and restart != "none":
+            print(f"Servizi        riavvio richiesto ({restart})")
+        print("\nL'aggiornamento si fa da DSM (Pannello di controllo > Aggiornamento")
+        print("e ripristino): da qui un aggiornamento fallito lascerebbe il NAS in uno")
+        print("stato che richiede intervento fisico.")
+
+    emit(args, data, show)
+
+
+def cmd_security(dsm, args):
+    data = fetch(dsm, "security")
+    etichette = {
+        "malware": "malware", "network": "rete", "systemCheck": "sistema",
+        "update": "aggiornamenti", "account": "account",
+    }
+
+    def show(d):
+        items = d.get("items") if isinstance(d.get("items"), dict) else d
+        rows = []
+        for key, item in sorted(items.items()):
+            if not isinstance(item, dict):
+                continue
+            fail = item.get("fail") or {}
+            gravi = sum(
+                v for k, v in fail.items()
+                if k in ("danger", "risk", "warning", "outOfDate") and isinstance(v, int)
+            )
+            rows.append([
+                etichette.get(key, key),
+                item.get("failSeverity", "-"),
+                gravi if gravi else "nessuno",
+                f"{item.get('progress', '-')}%",
+            ])
+        print(table(rows, ["controllo", "esito", "problemi", "analisi"]))
+
+    emit(args, data, show)
+
+
+def cmd_logs(dsm, args):
+    data = fetch(dsm, "logs")
+
+    def show(d):
+        rows = [[e.get("time"), e.get("level", "-"), (e.get("msg") or e.get("descr", ""))[:90]]
+                for e in rows_of(d, "items", "logs", "data")]
+        print(table(rows, ["quando", "livello", "messaggio"]))
+
+    emit(args, data, show)
+
+
+def cmd_ls(dsm, args):
+    if args.path in ("", "/"):
+        return cmd_shares(dsm, args)
+    data = dsm.call(
+        "SYNO.FileStation.List", "list",
+        params={
+            "folder_path": args.path,
+            "additional": ["size", "time", "type", "owner"],
+            "limit": args.limit,
+            "sort_by": "name",
+        },
+    )
+
+    def show(d):
+        rows = []
+        for item in d.get("files", []):
+            extra = item.get("additional", {})
+            rows.append([
+                item.get("name") + ("/" if item.get("isdir") else ""),
+                "dir" if item.get("isdir") else human_bytes(extra.get("size")),
+                time.strftime("%Y-%m-%d %H:%M", time.localtime(dig(extra, "time", "mtime", default=0))),
+                dig(extra, "owner", "user", default="-"),
+            ])
+        print(table(rows, ["nome", "dimensione", "modificato", "proprietario"]))
+        print(f"\n  {d.get('total', len(d.get('files', [])))} elementi in {args.path}")
+
+    emit(args, data, show)
+
+
+def cmd_find(dsm, args):
+    start = dsm.call(
+        "SYNO.FileStation.Search", "start",
+        params={"folder_path": args.path, "pattern": args.pattern, "recursive": True},
+    )
+    taskid = start.get("taskid")
+    try:
+        for _ in range(120):
+            data = dsm.call(
+                "SYNO.FileStation.Search", "list",
+                params={"taskid": taskid, "limit": args.limit,
+                        "additional": ["size", "time"]},
+            )
+            if data.get("finished"):
+                break
+            time.sleep(0.5)
+
+        def show(d):
+            rows = [[f.get("path"), human_bytes(dig(f, "additional", "size"))]
+                    for f in d.get("files", [])]
+            print(table(rows, ["percorso", "dimensione"]))
+            print(f"\n  {d.get('total', 0)} risultati per '{args.pattern}' sotto {args.path}")
+
+        emit(args, data, show)
+    finally:
+        try:
+            dsm.call("SYNO.FileStation.Search", "clean", params={"taskid": taskid})
+        except NasError:
+            pass
+
+
+def cmd_get(dsm, args):
+    """Scarica in streaming: un file da qualche GB non deve passare dalla RAM
+    (put invece la usa, e per questo ha un tetto)."""
+    dsm.login()
+    path, version = dsm.resolve("SYNO.FileStation.Download")
+    query = {"api": "SYNO.FileStation.Download", "version": version, "method": "download",
+             "path": args.remote, "mode": "download", "_sid": dsm._sid}
+    url = f"{dsm.base}/webapi/{path}?" + urllib.parse.urlencode(query)
+    req = urllib.request.Request(url, headers={"User-Agent": "nas-synology-skill/1.0"})
+    if dsm._token:
+        req.add_header("X-SYNO-TOKEN", dsm._token)
+    target = Path(args.local or Path(args.remote).name).expanduser()
+    if target.is_dir():
+        target = target / Path(args.remote).name
+    try:
+        with dsm._opener(dsm.host, dsm._ctx).open(req, timeout=dsm.timeout) as resp:
+            if "application/json" in resp.headers.get("Content-Type", ""):
+                errore = json.loads(resp.read().decode("utf-8"))
+                code = dig(errore, "error", "code")
+                raise NasError(f"download fallito (codice {code}): {FS_ERRORS.get(code, COMMON_ERRORS.get(code, 'errore'))}")
+            tmp = target.with_suffix(target.suffix + ".parte")
+            scritti = 0
+            with open(tmp, "wb") as out:
+                while True:
+                    blocco = resp.read(1024 * 1024)
+                    if not blocco:
+                        break
+                    out.write(blocco)
+                    scritti += len(blocco)
+            tmp.replace(target)
+    except urllib.error.URLError as exc:
+        raise NasError(f"download fallito: {exc.reason}")
+    print(f"scaricato {args.remote} -> {target} ({human_bytes(scritti)})")
+
+
+def cmd_put(dsm, args):
+    dsm.guard(args.yes, f"caricare {args.local} in {args.dest}")
+    dest = fs_upload(dsm, args.local, args.dest, overwrite=args.overwrite)
+    print(f"caricato {args.local} -> {dest}")
+
+
+def cmd_mkdir(dsm, args):
+    dsm.guard(args.yes, f"creare la cartella {args.path}")
+    parent = str(Path(args.path).parent)
+    name = Path(args.path).name
+    dsm.call(
+        "SYNO.FileStation.CreateFolder", "create",
+        params={"folder_path": [parent], "name": [name], "force_parent": True},
+    )
+    print(f"creata {args.path}")
+
+
+def cmd_rm(dsm, args):
+    dsm.guard(args.yes, f"eliminare {args.path}")
+    start = dsm.call("SYNO.FileStation.Delete", "start",
+                     params={"path": [args.path], "recursive": True})
+    poll_task(dsm, "SYNO.FileStation.Delete", start.get("taskid"), "eliminazione")
+    print(f"eliminato {args.path}")
+
+
+def _copy_move(dsm, args, remove_src, label):
+    dsm.guard(args.yes, f"{label} {args.src} in {args.dest}")
+    start = dsm.call(
+        "SYNO.FileStation.CopyMove", "start",
+        params={"path": [args.src], "dest_folder_path": args.dest,
+                "remove_src": remove_src, "overwrite": args.overwrite},
+    )
+    poll_task(dsm, "SYNO.FileStation.CopyMove", start.get("taskid"), label)
+    print(f"{label} completato: {args.src} -> {args.dest}")
+
+
+def cmd_mv(dsm, args):
+    _copy_move(dsm, args, True, "spostamento")
+
+
+def cmd_cp(dsm, args):
+    _copy_move(dsm, args, False, "copia")
+
+
+def cmd_package_ctl(dsm, args):
+    dsm.guard(args.yes, f"{args.action} del pacchetto {args.name}")
+    try:
+        dsm.call("SYNO.Core.Package.Control", args.action, params={"id": args.name})
+        print(f"{args.action} di {args.name}: richiesta inviata via API")
+        return
+    except NasError as exc:
+        api_error = exc
+    ssh = SSH()
+    if ssh.available():
+        ssh.run(f"synopkg {args.action} {args.name}")
+        print(f"{args.action} di {args.name}: eseguito via SSH (synopkg)")
+        return
+    raise NasError(f"{api_error}\nSenza SSH non c'e' un'alternativa: agisci da DSM.")
+
+
+def cmd_ssh(dsm, args):
+    parole = list(args.command)
+    # nargs=REMAINDER ingoia anche le opzioni: in `nas ssh 'du -sh /x' --yes` il
+    # --yes finiva nel comando remoto, e sul NAS arrivava `du -sh /x --yes`.
+    # Un'opzione nostra ai bordi del comando non puo' appartenere al comando.
+    OPZIONI = ("--yes", "--json", "--insecure")
+    while parole and parole[-1] in OPZIONI:
+        setattr(args, parole.pop()[2:], True)
+    while parole and parole[0] in OPZIONI:
+        setattr(args, parole.pop(0)[2:], True)
+    command = " ".join(parole).strip()
+    if not command:
+        die("nas ssh: manca il comando da eseguire sul NAS", 2)
+    if not args.yes and not _looks_readonly(command):
+        die(
+            f"il comando '{command}' non sembra di sola lettura. "
+            "Ripetilo con --yes se e' quello che vuoi.", 2
+        )
+    proc = SSH().run(command, check=False)
+    sys.stdout.write(proc.stdout)
+    sys.stderr.write(proc.stderr)
+    sys.exit(proc.returncode)
+
+
+READONLY_CMDS = {
+    "ls", "cat", "df", "du", "free", "uptime", "uname", "id", "whoami", "date", "ps",
+    "top", "head", "tail", "grep", "egrep", "find", "stat", "which", "echo", "wc",
+    "sort", "uniq", "cut", "awk", "sed", "tr", "column", "diff", "file", "realpath",
+    "synopkg", "synoservice", "smartctl", "btrfs", "zpool", "zfs", "mdadm", "lsblk",
+    "docker", "hostname", "ip", "netstat", "ss", "dmesg", "sensors", "getcfg",
+}
+WRITE_WORDS = re.compile(
+    r"\b(rm|mv|cp|dd|mkfs|shutdown|reboot|poweroff|chmod|chown|kill|killall|truncate|"
+    r"install|uninstall|start|stop|restart|enable|disable|set|delete|remove|prune|format)\b"
+)
+
+
+# Redirezioni che non scrivono da nessuna parte: verso /dev/null e fra
+# descrittori. Bloccare anche queste rendeva scomodo un `2>/dev/null`, che e'
+# il modo normale di zittire gli errori di permesso in un `du`.
+INNOCUE = re.compile(r"\d?>\s*/dev/null|\d?>&\d")
+PREFISSI = ("sudo", "env", "time", "nice", "ionice")
+
+
+def _comando_di(segmento):
+    """Il comando vero di un segmento, saltando i prefissi che ne avvolgono
+    un altro: in `sudo du -sh` quello che conta e' `du`."""
+    parole = segmento.split()
+    while parole and Path(parole[0]).name in PREFISSI:
+        parole = parole[1:]
+        while parole and parole[0].startswith("-"):
+            parole = parole[1:]
+    return Path(parole[0]).name if parole else ""
+
+
+# Costrutti con cui una shell esegue altro oltre a quello che si vede:
+# a capo, & in fondo o in mezzo (non &&), $(...), backtick.
+NASCOSTI = re.compile(r"[\n`]|\$\(|(?<!&)&(?!&)")
+# Comandi ammessi solo con sottocomandi di lettura: `btrfs` e' in lista, ma
+# `btrfs filesystem resize` no; `docker ps` si', `docker rmi` no.
+SOTTOCOMANDI = {
+    "btrfs": {"filesystem usage", "filesystem df", "filesystem show", "subvolume list",
+              "subvolume show", "device stats", "fi usage", "fi df", "fi show", "sub list"},
+    "mdadm": {"--detail", "-D", "--examine", "-E", "--query", "-Q"},
+    "docker": {"ps", "images", "stats", "logs", "inspect", "version", "info", "top", "port"},
+    "zpool": {"status", "list", "get", "history", "iostat"},
+    "zfs": {"list", "get"},
+    "sed": None,      # gestito a parte: mai con -i
+}
+
+
+def _sottocomando_ok(segmento):
+    parole = segmento.split()
+    while parole and Path(parole[0]).name in PREFISSI:
+        parole = parole[1:]
+        while parole and parole[0].startswith("-"):
+            parole = parole[1:]
+    if not parole:
+        return False
+    nome = Path(parole[0]).name
+    if nome == "sed":
+        return not any(p == "-i" or p.startswith("-i") or p.startswith("--in-place") for p in parole[1:])
+    if nome == "ip":
+        # `ip addr show` legge, `ip addr flush` no: e' il verbo dopo l'oggetto
+        # a decidere, e le opzioni -4/-6/-br possono precedere l'oggetto.
+        resto = [w for w in parole[1:] if not w.startswith("-")]
+        verbi_scrittura = {"flush", "add", "del", "delete", "replace", "change", "set",
+                           "up", "down", "append", "prepend"}
+        return bool(resto) and resto[0] in {"addr", "address", "a", "route", "r", "link",
+                                            "l", "neigh", "n"} \
+            and not any(w in verbi_scrittura for w in resto[1:])
+    ammessi = SOTTOCOMANDI.get(nome)
+    if ammessi is None:
+        return True
+    resto = " ".join(parole[1:])
+    return any(resto == a or resto.startswith(a + " ") for a in ammessi)
+
+
+def _looks_readonly(command):
+    # Prima si tolgono le redirezioni innocue (2>&1 contiene un & che non e'
+    # un background), poi si cercano i costrutti nascosti.
+    ripulito = INNOCUE.sub("", command)
+    if NASCOSTI.search(ripulito):
+        return False
+    if WRITE_WORDS.search(ripulito) or ">" in ripulito:
+        return False
+    # Ogni segmento della catena deve essere di sola lettura, non solo il
+    # primo: in `du | tee elenco.txt` il comando che scrive e' il secondo.
+    segmenti = [s.strip() for s in re.split(r"\||;|&&", ripulito) if s.strip()]
+    if not segmenti:
+        return False
+    return all(_comando_di(s) in READONLY_CMDS and _sottocomando_ok(s) for s in segmenti)
+
+
+def cmd_api(dsm, args):
+    if args.action == "list":
+        apis = dsm.api_info(refresh=args.refresh)
+        needle = (args.filter or "").lower()
+        rows = [[name, entry.get("path"), f"{entry.get('minVersion', 1)}-{entry.get('maxVersion', 1)}"]
+                for name, entry in sorted(apis.items()) if needle in name.lower()]
+        if args.json:
+            print(json.dumps({r[0]: {"path": r[1], "versions": r[2]} for r in rows}, indent=2))
+        else:
+            print(table(rows, ["API", "path", "versioni"]))
+            print(f"\n  {len(rows)} API" + (f" contenenti '{args.filter}'" if needle else ""))
+        return
+    params = {}
+    for pair in args.params:
+        key, _, value = pair.partition("=")
+        if not _:
+            die(f"parametro '{pair}' non e' nella forma chiave=valore")
+        try:
+            params[key] = json.loads(value)
+        except ValueError:
+            params[key] = value
+    if args.method not in ("list", "get", "info", "query", "load_info", "check", "status",
+                           "getinfo", "list_share", "system_get") and not args.yes:
+        die(
+            f"'{args.api}.{args.method}' non e' un metodo di sola lettura noto. "
+            "Ripeti con --yes se sai cosa fa.", 2
+        )
+    data = dsm.call(args.api, args.method, version=args.api_version, params=params)
+    print(json.dumps(data, indent=2, ensure_ascii=False))
+
+
+def cmd_cloud(dsm, args):
+    """Cosa impostare nell'environment cloud, ricavato dalla configurazione
+    locale. Senza mai stampare la password: finisce negli screenshot e nello
+    scrollback, e l'utente la conosce gia'."""
+    urls = url_candidates(required=False)
+    pubblici = [u for u in urls if not is_local_host(host_of(u))]
+    user = cfg("NAS_USER") or "<utente DSM>"
+    print("Per usare il NAS dalle sessioni cloud (claude.ai/code, anche dal telefono).")
+    print("Su claude.ai/code apri le impostazioni dell'environment che usi e imposta:")
+    print()
+    if pubblici:
+        print("1. Network: nella lista dei domini permessi aggiungi")
+        for u in pubblici:
+            print(f"     {host_of(u)}")
+        print()
+        print("2. Variabili d'ambiente:")
+        print(f"     NAS_URL={','.join(pubblici)}")
+    else:
+        print("1. Ti serve prima un indirizzo pubblico del NAS, perche' LAN e Tailscale")
+        print("   non sono raggiungibili da un container cloud. Il piu' semplice e'")
+        print("   QuickConnect: in DSM, Pannello di controllo > Accesso esterno >")
+        print("   QuickConnect, e l'indirizzo e' https://<id>.<regione>.quickconnect.to")
+        print("   (lo vedi nel browser quando apri DSM da fuori casa).")
+        print("   Aggiungilo a NAS_URL nella configurazione del Mac, dopo gli altri,")
+        print("   e rilancia 'nas cloud'.")
+        print()
+        print("2. Variabili d'ambiente (una volta trovato l'indirizzo):")
+        print("     NAS_URL=https://<id>.<regione>.quickconnect.to")
+    print(f"     NAS_USER={user}")
+    print("     NAS_PASS=<la password di questo utente DSM>")
+    if cfg("NAS_OTP_SECRET"):
+        print("     NAS_OTP_SECRET=<lo stesso segreto 2FA della configurazione del Mac>")
+    print("     NAS_TIMEOUT=90")
+    print()
+    print("3. La skill: o la carichi sull'account (Impostazioni > Capacita' > Skill,")
+    print("   con lo zip prodotto da ./package-for-claude-ai.sh nas-synology), oppure")
+    print("   nel campo Setup script dell'environment metti:")
+    print("     git clone --depth 1 https://github.com/doctorplastic79-cmd/claude-skills.git \\")
+    print("       /opt/claude-skills && /opt/claude-skills/install.sh || true")
+    print()
+    print("Poi, in una sessione cloud nuova: 'nas check'. Se il dominio non e' ancora")
+    print("permesso, lo dice con questo stesso nome, e sai dove tornare.")
+
+
+def cmd_logout(dsm, args):
+    print("sessione chiusa" if dsm.logout() else "nessuna sessione da chiudere")
+
+
+# --------------------------------------------------------------------- main
+
+
+def build_parser():
+    parser = argparse.ArgumentParser(
+        prog="nas",
+        description="Gestione di un NAS Synology DSM 7 via API Web (e SSH dove disponibile).",
+        epilog="Credenziali da ambiente o ~/.config/nas-synology/config.env. "
+               "Le operazioni che scrivono richiedono --yes.",
+    )
+    parser.add_argument("--json", action="store_true", help="output JSON grezzo")
+    parser.add_argument("--insecure", action="store_true",
+                        help="non verificare il certificato TLS (solo LAN fidata)")
+    parser.add_argument("--yes", action="store_true",
+                        help="conferma un'operazione che modifica il NAS")
+    sub = parser.add_subparsers(dest="cmd", required=True)
+
+    # Le stesse opzioni valgono prima e dopo il sottocomando: "nas --yes rm X" e
+    # "nas rm X --yes" sono equivalenti. SUPPRESS evita che il sottoparser
+    # sovrascriva con False un flag gia' passato prima del sottocomando.
+    shared = argparse.ArgumentParser(add_help=False)
+    for flag, helptext in (
+        ("--json", "output JSON grezzo"),
+        ("--insecure", "non verificare il certificato TLS (solo LAN fidata)"),
+        ("--yes", "conferma un'operazione che modifica il NAS"),
+    ):
+        shared.add_argument(flag, action="store_true", default=argparse.SUPPRESS, help=helptext)
+
+    def add(name, func, help_text, needs_dsm=True):
+        sp = sub.add_parser(name, help=help_text, parents=[shared])
+        sp.set_defaults(func=func, needs_dsm=needs_dsm)
+        return sp
+
+    add("check", cmd_check, "verifica credenziali, rete e trasporti disponibili")
+    add("health", cmd_health, "rapporto completo: sistema, dischi, carico, backup, update")
+    add("info", cmd_info, "modello, versione DSM, uptime, temperatura")
+    add("usage", cmd_usage, "carico attuale di CPU, RAM, rete e dischi")
+    add("storage", cmd_storage, "volumi, dischi, SMART e gruppi di archiviazione")
+    add("shares", cmd_shares, "cartelle condivise")
+    add("users", cmd_users, "utenti locali")
+    add("groups", cmd_groups, "gruppi locali")
+    add("connections", cmd_connections, "sessioni e connessioni in corso")
+    add("packages", cmd_packages, "pacchetti installati e loro stato")
+    add("services", cmd_services, "servizi di sistema")
+    add("tasks", cmd_tasks, "attivita' pianificate")
+    add("docker", cmd_docker, "container di Container Manager")
+    add("backups", cmd_backups, "task di Hyper Backup e loro esito")
+    add("updates", cmd_updates, "aggiornamenti DSM disponibili")
+    add("security", cmd_security, "esito dell'analisi di sicurezza di DSM")
+    add("logs", cmd_logs, "ultime voci del registro di sistema")
+    add("logout", cmd_logout, "chiude la sessione e cancella il SID salvato")
+    add("cloud", cmd_cloud, "cosa impostare nell'environment cloud per usare il NAS dal telefono",
+        needs_dsm=False)
+
+    sp = add("ls", cmd_ls, "elenca una cartella (senza argomenti: le condivisioni)")
+    sp.add_argument("path", nargs="?", default="/")
+    sp.add_argument("--limit", type=int, default=200)
+
+    sp = add("find", cmd_find, "cerca file per nome sotto un percorso")
+    sp.add_argument("pattern")
+    sp.add_argument("--path", default="/home")
+    sp.add_argument("--limit", type=int, default=100)
+
+    sp = add("get", cmd_get, "scarica un file dal NAS")
+    sp.add_argument("remote")
+    sp.add_argument("local", nargs="?")
+
+    sp = add("put", cmd_put, "carica un file nel NAS [scrive]")
+    sp.add_argument("local")
+    sp.add_argument("dest", help="cartella di destinazione, es. /home/Drive")
+    sp.add_argument("--overwrite", action="store_true")
+
+    sp = add("mkdir", cmd_mkdir, "crea una cartella [scrive]")
+    sp.add_argument("path")
+
+    sp = add("rm", cmd_rm, "elimina file o cartella [scrive]")
+    sp.add_argument("path")
+
+    for name, func, help_text in (("mv", cmd_mv, "sposta [scrive]"), ("cp", cmd_cp, "copia [scrive]")):
+        sp = add(name, func, f"{help_text} un file o una cartella")
+        sp.add_argument("src")
+        sp.add_argument("dest", help="cartella di destinazione")
+        sp.add_argument("--overwrite", action="store_true")
+
+    sp = add("package", cmd_package_ctl, "avvia o ferma un pacchetto [scrive]")
+    sp.add_argument("action", choices=["start", "stop"])
+    sp.add_argument("name", help="id del pacchetto, es. Docker")
+
+    sp = add("ssh", cmd_ssh, "esegue un comando shell sul NAS (serve SSH)", needs_dsm=False)
+    sp.add_argument("command", nargs=argparse.REMAINDER)
+
+    sp = add("api", cmd_api, "scopre e chiama qualunque API di questo DSM")
+    sp.add_argument("action", choices=["list", "call"])
+    sp.add_argument("api", nargs="?", help="nome API per 'call', filtro per 'list'")
+    sp.add_argument("method", nargs="?")
+    sp.add_argument("params", nargs="*", help="coppie chiave=valore")
+    sp.add_argument("--api-version", type=int)
+    sp.add_argument("--refresh", action="store_true", help="rilegge il catalogo API")
+    return parser
+
+
+def main():
+    load_config()
+    parser = build_parser()
+    args = parser.parse_args()
+    if args.cmd == "api":
+        if args.action == "list":
+            args.filter = args.api
+        elif not args.api or not args.method:
+            parser.error("nas api call <API> <metodo> [chiave=valore ...]")
+    try:
+        dsm = DSM(insecure=args.insecure) if args.needs_dsm else None
+        args.func(dsm, args)
+    except NasError as exc:
+        die(str(exc))
+    except KeyboardInterrupt:
+        die("interrotto", 130)
+    except BrokenPipeError:
+        # `nas ... | head` chiude la pipe prima che si finisca di scrivere:
+        # e' il lettore che ha avuto abbastanza, non un errore nostro.
+        try:
+            sys.stdout.close()
+        except Exception:
+            pass
+        sys.exit(0)
+    except Exception as exc:  # noqa: BLE001
+        # Nessun traceback in faccia a chi usa lo strumento: dice cosa e' andato
+        # storto e come ottenere il dettaglio, se serve a segnalarlo.
+        if truthy(cfg("NAS_DEBUG")):
+            raise
+        die(
+            f"errore imprevisto ({type(exc).__name__}: {exc}). "
+            "Per il dettaglio completo: NAS_DEBUG=1 davanti al comando.",
+            70,
+        )
+
+
+if __name__ == "__main__":
+    main()

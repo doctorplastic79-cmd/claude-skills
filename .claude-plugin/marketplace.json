@@ -25,6 +25,16 @@
       "description": "Traduce e doppia un video in un'altra lingua con voice cloning e lip-sync, via HeyGen Video Translation."
     },
     {
+      "name": "nas-synology",
+      "source": "./skills/nas-synology",
+      "description": "Accede a un NAS Synology DSM 7 e lo gestisce: stato dischi e volumi, file, pacchetti, backup, log. Funziona da Mac (API + SSH) e da cellulare (solo API)."
+    },
+    {
+      "name": "regia",
+      "source": "./skills/regia",
+      "description": "Fa eseguire il lavoro all'altro modello mentre tu fai la regia: da Claude delega a ChatGPT (CLI codex), da Codex delega a Claude. Brief, schemi JSON, esecuzione in parallelo, contraddittorio, registro dei lavori."
+    },
+    {
       "name": "kits",
       "source": "./skills/kits",
       "description": "Conversione voce-a-voce con l'API di Kits.ai: elenca i modelli vocali dell'account e converte file audio WAV/MP3 con un modello scelto."

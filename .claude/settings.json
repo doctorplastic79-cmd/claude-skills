@@ -1,0 +1,28 @@
+{
+  "extraKnownMarketplaces": {
+    "openai-codex": {
+      "source": {
+        "source": "github",
+        "repo": "openai/codex-plugin-cc"
+      }
+    }
+  },
+  "enabledPlugins": {
+    "codex@openai-codex": true
+  },
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "command -v codex >/dev/null 2>&1 || npm install -g @openai/codex >/dev/null 2>&1; if command -v codex >/dev/null 2>&1 && [ -n \"$OPENAI_API_KEY\" ] && ! codex login status >/dev/null 2>&1; then printenv OPENAI_API_KEY | codex login --with-api-key >/dev/null 2>&1; fi",
+            "timeout": 300,
+            "async": true,
+            "statusMessage": "Preparing Codex CLI..."
+          }
+        ]
+      }
+    ]
+  }
+}
