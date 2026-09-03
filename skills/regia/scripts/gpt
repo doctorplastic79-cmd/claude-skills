@@ -1,0 +1,814 @@
+#!/bin/bash
+#
+# gpt — il canale della regia.
+#
+# Il regista scrive il brief, sceglie il formato della risposta e verifica il
+# risultato; l'esecutore lavora. L'esecutore dev'essere sempre L'ALTRO modello:
+# da Claude si delega a ChatGPT (CLI `codex`), da Codex/ChatGPT si delega a
+# Claude (CLI `claude -p`). Entrambe usano l'abbonamento, non chiavi API.
+#
+# Ogni lavoro lascia una cartella in ~/.regia/lavori con brief, risposta,
+# eventi e metadati: la regia resta controllabile a posteriori.
+#
+# Uso rapido:
+#   gpt check
+#   gpt chiedi "brief"                         una risposta di testo (sola lettura)
+#   gpt json --schema s.json "brief"           una risposta strutturata, validata
+#   gpt lavora --dir CARTELLA "brief"          esecuzione che può scrivere lì dentro
+#   gpt rivedi --dir CARTELLA "brief"          parere indipendente, sola lettura
+#   gpt continua --ultimo "brief"              prosegue la conversazione precedente
+#   gpt squadra --brief a.md --brief b.md      più esecutori in parallelo
+#   gpt lavori | gpt mostra ID                 registro dei lavori
+#   gpt esecutore claude                       cambia chi esegue, per sempre
+#
+# Codici d'uscita: 0 ok · 2 uso errato · 3 canale non pronto · 4 tempo scaduto
+#                  5 esecutore fallito · 6 risposta non conforme allo schema
+
+set -u
+
+# Nel registro finiscono brief e risposte: possono contenere materiale di
+# lavoro che non deve essere leggibile dagli altri account della macchina.
+umask 077
+
+VERSIONE="1.2"
+REGIA_HOME="${REGIA_HOME:-$HOME/.regia}"
+LAVORI="$REGIA_HOME/lavori"
+
+# Chi esegue. Il regista è chi lancia questo script; l'esecutore dev'essere
+# **l'altro modello**, altrimenti il contraddittorio è una conversazione allo
+# specchio: da Claude si delega a ChatGPT, da Codex/ChatGPT si delega a Claude.
+#
+# Di solito non c'è niente da configurare, perché lo dice già il posto in cui
+# la skill è installata: sotto ~/.codex/ il regista è Codex, quindi esegue
+# Claude; altrove il regista è Claude, quindi esegue ChatGPT.
+#
+# Precedenza: --esecutore  >  $REGIA_ESECUTORE  >  <skill>/.esecutore  >  dove
+# è installata. Il file `.esecutore` sta dentro la cartella della skill, non
+# nella home: due installazioni diverse devono poter delegare a due modelli
+# diversi sulla stessa macchina.
+ESECUTORE=""
+SKILL_DIR="$(cd "$(dirname "$0")/.." 2>/dev/null && pwd || echo "")"
+
+risolvi_esecutore() {
+    if [ -z "$ESECUTORE" ]; then
+        if [ -n "${REGIA_ESECUTORE:-}" ]; then
+            ESECUTORE="$REGIA_ESECUTORE"
+        elif [ -n "$SKILL_DIR" ] && [ -f "$SKILL_DIR/.esecutore" ]; then
+            ESECUTORE="$(tr -d ' \n' < "$SKILL_DIR/.esecutore")"
+        else
+            case "$SKILL_DIR" in
+                "$HOME/.codex"/*|"$HOME/.codex") ESECUTORE="claude" ;;
+                *)                               ESECUTORE="chatgpt" ;;
+            esac
+        fi
+    fi
+    case "$ESECUTORE" in
+        chatgpt|claude) ;;
+        *) muori "esecutore sconosciuto: $ESECUTORE (chatgpt oppure claude)" 2 ;;
+    esac
+}
+
+comando_esecutore() {
+    local scelta="${1:-}"
+    if [ -z "$scelta" ]; then
+        risolvi_esecutore
+        printf '%s\n' "$ESECUTORE"
+        return 0
+    fi
+    case "$scelta" in
+        chatgpt|claude) ;;
+        *) muori "esecutore sconosciuto: $scelta (chatgpt oppure claude)" 2 ;;
+    esac
+    [ -n "$SKILL_DIR" ] && [ -w "$SKILL_DIR" ] || muori "non posso scrivere in $SKILL_DIR" 2
+    printf '%s\n' "$scelta" > "$SKILL_DIR/.esecutore"
+    verde "questa installazione della skill ora delega a: $scelta"
+    nota  "($SKILL_DIR/.esecutore)"
+}
+
+prepara_registro() {
+    mkdir -p "$LAVORI" || muori "non riesco a creare $LAVORI" 2
+    chmod 700 "$REGIA_HOME" "$LAVORI" 2>/dev/null || true
+}
+
+# ---------------------------------------------------------------- utilità ---
+
+rosso()   { printf '\033[31m%s\033[0m\n' "$*" >&2; }
+giallo()  { printf '\033[33m%s\033[0m\n' "$*" >&2; }
+verde()   { printf '\033[32m%s\033[0m\n' "$*" >&2; }
+nota()    { printf '%s\n' "$*" >&2; }
+
+muori() { rosso "gpt: $1"; exit "${2:-2}"; }
+
+esiste_codex() { command -v codex >/dev/null 2>&1; }
+
+# Il canale giusto per l'esecutore scelto: senza il suo binario non si parte.
+verifica_esecutore() {
+    risolvi_esecutore
+    if [ "$ESECUTORE" = "claude" ]; then
+        command -v claude >/dev/null 2>&1 || \
+            muori "esecutore 'claude' scelto ma la CLI claude non c'è. Installala, oppure: gpt esecutore chatgpt" 3
+    else
+        esiste_codex || \
+            muori "esecutore 'chatgpt' scelto ma codex non c'è: npm install -g @openai/codex" 3
+    fi
+}
+
+# Esegue un comando con un guinzaglio: bash 3.2 di macOS non ha `timeout`.
+# Restituisce 124 se il tempo è scaduto, altrimenti il codice del comando.
+con_guinzaglio() {
+    local secondi="$1"; shift
+    local banco marca
+    banco="$(mktemp -d "${TMPDIR:-/tmp}/regia-cane.XXXXXX")"
+    marca="$banco/scattato"
+
+    # perl mette il comando in un gruppo di processi tutto suo (setpgrp): alla
+    # scadenza si uccide il GRUPPO, non il solo pid. Codex lancia sottoprocessi,
+    # e uccidere solo il padre lascerebbe orfani che continuano a lavorare.
+    perl -e 'setpgrp(0,0); exec @ARGV or die "exec fallito: $!"' "$@" &
+    local pid=$!
+    (
+        # il cane da guardia non deve stampare nulla se tutto va bene
+        local passati=0
+        while [ "$passati" -lt "$secondi" ]; do
+            kill -0 "$pid" 2>/dev/null || exit 0
+            sleep 1
+            passati=$((passati + 1))
+        done
+        : > "$marca"
+        kill -TERM "-$pid" 2>/dev/null || kill -TERM "$pid" 2>/dev/null
+        sleep 5
+        kill -KILL "-$pid" 2>/dev/null || kill -KILL "$pid" 2>/dev/null
+    ) &
+    local cane=$!
+    local esito=0
+    wait "$pid" 2>/dev/null || esito=$?
+    kill "$cane" 2>/dev/null
+    wait "$cane" 2>/dev/null || true
+
+    # Il codice d'uscita non basta a riconoscere il tempo scaduto: codex
+    # intercetta il TERM e se ne va con 0, fingendo una fine regolare.
+    # L'unico testimone attendibile è il cane da guardia stesso.
+    if [ -f "$marca" ]; then rm -rf "$banco"; return 124; fi
+    rm -rf "$banco"
+    return "$esito"
+}
+
+# Rifiuta i brief che contengono un segreto scritto per esteso: quello che
+# entra qui esce dalla macchina.
+#
+# È una rete, non un muro: prende le forme comuni (anche dentro JSON, anche i
+# token noti), ma NON può vedere i file che l'esecutore legge da --dir né le
+# immagini di --immagine. Quella parte resta giudizio di chi scrive il brief.
+guardia_segreti() {
+    local testo="$1"
+    [ "$CONSAPEVOLE" = "si" ] && return 0
+    local trovato=""
+    # chiave: valore, chiave=valore, "chiave": "valore"  (anche dentro JSON o YAML)
+    if printf '%s' "$testo" | grep -Eiq '["'"'"']?(password|passwd|pwd|api[-_ ]?key|apikey|secret|segreto|token|access[-_ ]?token|client[-_ ]?secret)["'"'"']?[[:space:]]*[:=][[:space:]]*["'"'"']?[^[:space:]"'"'"',}]{4,}'; then
+        trovato="una credenziale scritta per esteso (chiave e valore)"
+    elif printf '%s' "$testo" | grep -Eiq 'bearer[[:space:]]+[A-Za-z0-9._~+/-]{20,}'; then
+        trovato="un token di autorizzazione (Bearer)"
+    elif printf '%s' "$testo" | grep -Eq 'sk-[A-Za-z0-9_-]{20,}|gh[pousr]_[A-Za-z0-9]{20,}|xox[baprs]-[A-Za-z0-9-]{10,}|AKIA[0-9A-Z]{16}'; then
+        trovato="una chiave API in chiaro"
+    elif printf '%s' "$testo" | grep -Eq 'BEGIN [A-Z ]*PRIVATE KEY'; then
+        trovato="una chiave privata"
+    fi
+    if [ -n "$trovato" ]; then
+        rosso "il brief contiene $trovato."
+        nota  "Il brief esce dalla macchina. Toglila e passa al suo posto il NOME"
+        nota  "dell'elemento del Portachiavi. Se il valore è finto: --consapevole."
+        exit 2
+    fi
+}
+
+# L'ultima sessione riuscita **dello stesso contesto**.
+#
+# Il registro è unico per tutta la macchina: se due lavorazioni diverse vanno
+# avanti in parallelo, "l'ultima sessione" in assoluto può essere quella
+# dell'altra. Riprendere la conversazione sbagliata produce una risposta
+# coerente e falsa, che è il modo peggiore di sbagliare. Quindi si riprende
+# solo ciò che è nato nella stessa cartella; altrimenti si chiede l'id esatto.
+# Stampa: "<uuid><TAB><nome del lavoro>".
+ultima_sessione() {
+    local contesto="$1"
+    local d s c
+    for d in $(ls -1t "$LAVORI" 2>/dev/null); do
+        [ -f "$LAVORI/$d/meta.json" ] || continue
+        s="$(jq -r 'select(.esito == 0) | .sessione // empty' "$LAVORI/$d/meta.json" 2>/dev/null)"
+        [ -n "$s" ] && [ "$s" != "null" ] || continue
+        c="$(jq -r '.cwd // ""' "$LAVORI/$d/meta.json" 2>/dev/null)"
+        [ "$c" = "$contesto" ] || continue
+        printf '%s\t%s' "$s" "$d"
+        return 0
+    done
+    return 1
+}
+
+nuovo_lavoro() {
+    local tag
+    tag="$(printf '%s' "$1" | tr ' /' '--' | tr -cd 'A-Za-z0-9._-')"
+    [ -n "$tag" ] || tag="lavoro"
+    local base
+    base="$(date +%Y%m%d-%H%M%S)"
+    local cartella="$LAVORI/$base-$tag"
+    local n=2
+    while [ -e "$cartella" ]; do
+        cartella="$LAVORI/$base-$tag-$n"
+        n=$((n + 1))
+    done
+    mkdir -p "$cartella" || muori "non riesco a creare $cartella" 2
+    printf '%s' "$cartella"
+}
+
+# Estrae l'id di sessione dagli eventi JSONL, in modo tollerante al formato.
+id_sessione() {
+    local eventi="$1"
+    [ -f "$eventi" ] || return 0
+    local id
+    id="$(jq -r '.. | objects | (.session_id // .thread_id // .conversation_id // empty)' "$eventi" 2>/dev/null | grep -Ei '^[0-9a-f-]{36}$' | head -1)"
+    if [ -z "$id" ]; then
+        id="$(grep -Eo '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}' "$eventi" 2>/dev/null | head -1)"
+    fi
+    printf '%s' "$id"
+}
+
+# ------------------------------------------------------------- opzioni ------
+
+SOTTOCOMANDO=""
+BRIEF=""
+BRIEF_FILE=""
+DIR=""
+MODELLO=""
+SFORZO="high"
+SANDBOX="read-only"
+TIMEOUT=600
+TAG=""
+SCHEMA=""
+IMMAGINI=""
+SESSIONE=""
+ULTIMO="no"
+PROVA="no"
+CONSAPEVOLE="no"
+SILENZIOSO="no"
+PARALLELE=3
+BRIEFS=""
+QUANTI=15
+
+# bash 3.2: `shift 2` con un solo argomento residuo non sposta niente e il
+# ciclo gira a vuoto per sempre. Ogni opzione con valore passa di qui.
+numero() {
+    case "$2" in
+        ''|*[!0-9]*) muori "$1 vuole un numero intero: '$2'" 2 ;;
+    esac
+    [ "$2" -gt 0 ] || muori "$1 dev'essere maggiore di zero" 2
+}
+
+leggi_opzioni() {
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --dir|-C|--modello|-m|--sforzo|--sandbox|--timeout|--tag|--schema|--file|--immagine|--sessione|--brief|--parallele|--quanti|--esecutore)
+                [ $# -ge 2 ] || muori "l'opzione $1 vuole un valore" 2 ;;
+        esac
+        case "$1" in
+            --esecutore)     ESECUTORE="$2"; risolvi_esecutore; shift 2 ;;
+            --dir|-C)        DIR="${2:-}"; shift 2 ;;
+            --modello|-m)    MODELLO="${2:-}"; shift 2 ;;
+            --sforzo)        SFORZO="${2:-}"; shift 2 ;;
+            --sandbox)       SANDBOX="$2"; valida_sandbox; shift 2 ;;
+            --timeout)       numero --timeout "$2"; TIMEOUT="$2"; shift 2 ;;
+            --tag)           TAG="${2:-}"; shift 2 ;;
+            --schema)        SCHEMA="${2:-}"; shift 2 ;;
+            --file)          BRIEF_FILE="${2:-}"; shift 2 ;;
+            --immagine)      IMMAGINI="$IMMAGINI ${2:-}"; shift 2 ;;
+            --sessione)      SESSIONE="${2:-}"; shift 2 ;;
+            --ultimo)        ULTIMO="si"; shift ;;
+            --brief)         BRIEFS="$BRIEFS
+${2:-}"; shift 2 ;;
+            --parallele)     numero --parallele "$2"; PARALLELE="$2"; shift 2 ;;
+            --quanti)        numero --quanti "$2"; QUANTI="$2"; shift 2 ;;
+            --prova)         PROVA="si"; shift ;;
+            --consapevole)   CONSAPEVOLE="si"; shift ;;
+            --silenzioso|-q) SILENZIOSO="si"; shift ;;
+            -h|--help)       uso; exit 0 ;;
+            --)              shift; break ;;
+            -*)              muori "opzione sconosciuta: $1" 2 ;;
+            *)               if [ -z "$BRIEF" ]; then BRIEF="$1"; else BRIEF="$BRIEF
+$1"; fi; shift ;;
+        esac
+    done
+    # eventuale coda dopo --
+    while [ $# -gt 0 ]; do
+        if [ -z "$BRIEF" ]; then BRIEF="$1"; else BRIEF="$BRIEF
+$1"; fi
+        shift
+    done
+}
+
+carica_brief() {
+    if [ -n "$BRIEF_FILE" ]; then
+        [ -f "$BRIEF_FILE" ] || muori "brief non trovato: $BRIEF_FILE" 2
+        local dal_file
+        dal_file="$(cat "$BRIEF_FILE")"
+        if [ -n "$BRIEF" ]; then BRIEF="$BRIEF
+
+$dal_file"; else BRIEF="$dal_file"; fi
+    fi
+    if [ -z "$BRIEF" ] && [ ! -t 0 ]; then
+        BRIEF="$(cat)"
+    fi
+    [ -n "$BRIEF" ] || muori "manca il brief (argomento, --file, oppure standard input)" 2
+    guardia_segreti "$BRIEF"
+}
+
+valida_sforzo() {
+    case "$SFORZO" in
+        low|medium|high|xhigh|ultra|max) ;;
+        *) muori "sforzo non valido: $SFORZO (low, medium, high, xhigh, ultra, max)" 2 ;;
+    esac
+}
+
+valida_sandbox() {
+    case "$SANDBOX" in
+        read-only|workspace-write) ;;
+        danger-full-access) muori "questa skill non apre mai il sandbox completo: usa --dir con 'lavora'" 2 ;;
+        *) muori "sandbox non valido: $SANDBOX" 2 ;;
+    esac
+}
+
+valida_dir() {
+    [ -n "$DIR" ] || return 0
+    [ -d "$DIR" ] || muori "la cartella non esiste: $DIR" 2
+    DIR="$(cd "$DIR" && pwd)"
+    case "$DIR" in
+        /|"$HOME") muori "cartella di lavoro troppo larga: $DIR. Scegline una specifica." 2 ;;
+    esac
+}
+
+# ------------------------------------------------------------- il canale ----
+
+# Costruisce ed esegue la chiamata. Usa le variabili globali già validate.
+# Scrive dentro $CARTELLA: brief.md, risposta(.md|.json), eventi.jsonl,
+# comando.txt, meta.json. Stampa la risposta su stdout.
+esegui() {
+    local CARTELLA="$1"
+    local modo="$2"   # nuovo | continua
+
+    risolvi_esecutore
+    printf '%s\n' "$BRIEF" > "$CARTELLA/brief.md"
+
+    local risposta="$CARTELLA/risposta.md"
+    [ -n "$SCHEMA" ] && risposta="$CARTELLA/risposta.json"
+
+    if [ -n "$SCHEMA" ]; then
+        [ -f "$SCHEMA" ] || muori "schema non trovato: $SCHEMA" 2
+        jq empty "$SCHEMA" 2>/dev/null || muori "lo schema non è JSON valido: $SCHEMA" 6
+        cp "$SCHEMA" "$CARTELLA/schema.json"
+    fi
+
+    if [ "$ESECUTORE" = "claude" ]; then
+        esegui_con_claude "$CARTELLA" "$modo" "$risposta"
+        return $?
+    fi
+
+    # Argomenti di codex. Attenzione: `exec` e `exec resume` NON accettano gli
+    # stessi flag. Su resume non esistono --color, --sandbox e -C: la sandbox
+    # si passa come config e nella cartella ci si sposta a mano.
+    local -a args
+    if [ "$modo" = "continua" ]; then
+        args=(exec resume)
+        if [ "$ULTIMO" = "si" ]; then args+=(--last --all); else args+=("$SESSIONE"); fi
+        args+=(--skip-git-repo-check)
+        args+=(-c "sandbox_mode=\"$SANDBOX\"")
+    else
+        args=(exec --skip-git-repo-check --color never)
+        args+=(--sandbox "$SANDBOX")
+        [ -n "$DIR" ] && args+=(-C "$DIR")
+    fi
+    args+=(-c "model_reasoning_effort=\"$SFORZO\"")
+    args+=(--json -o "$risposta")
+    [ -n "$MODELLO" ] && args+=(-m "$MODELLO")
+    [ -n "$SCHEMA" ] && args+=(--output-schema "$SCHEMA")
+    local img
+    for img in $IMMAGINI; do
+        [ -f "$img" ] || muori "immagine non trovata: $img" 2
+        args+=(-i "$img")
+    done
+    args+=(-)   # il brief arriva dallo standard input
+
+    { printf 'codex'; for a in "${args[@]}"; do printf ' %q' "$a"; done; printf '\n'; } > "$CARTELLA/comando.txt"
+
+    if [ "$PROVA" = "si" ]; then
+        cat "$CARTELLA/comando.txt"
+        rm -rf "$CARTELLA"      # una prova a secco non sporca il registro
+        return 0
+    fi
+
+    [ "$SILENZIOSO" = "si" ] || nota "→ ChatGPT al lavoro (${SFORZO}, ${SANDBOX}${DIR:+, in $(basename "$DIR")})…"
+
+    local inizio fine esito
+    inizio="$(date +%s)"
+    printf '%s' "$BRIEF" > "$CARTELLA/.stdin"
+    # Il brief arriva da un file, non da una pipe: codex resta appeso se lo
+    # stdin è una pipe che non si chiude.
+    con_guinzaglio "$TIMEOUT" \
+        env CODEX_BRIEF="$CARTELLA/.stdin" CODEX_CWD="${DIR:-$PWD}" \
+        bash -c 'cd "$CODEX_CWD" && exec codex "$@" < "$CODEX_BRIEF"' _ "${args[@]}" \
+        > "$CARTELLA/eventi.jsonl" 2> "$CARTELLA/errori.txt"
+    esito=$?
+    fine="$(date +%s)"
+    rm -f "$CARTELLA/.stdin"
+
+    local sessione
+    sessione="$(id_sessione "$CARTELLA/eventi.jsonl")"
+    concludi "$CARTELLA" "$risposta" "$esito" "$((fine - inizio))" "$sessione" "$modo"
+}
+
+# Il canale verso Claude Code non interattivo (`claude -p`). Serve quando il
+# regista è ChatGPT o Codex: l'esecutore dev'essere l'altro modello, altrimenti
+# è una conversazione allo specchio. Qui la sandbox si chiama "modalità di
+# permesso": `plan` non tocca niente, `acceptEdits` scrive nella cartella.
+esegui_con_claude() {
+    local CARTELLA="$1" modo="$2" risposta="$3"
+
+    local -a args
+    args=(-p --output-format json)
+    case "$SANDBOX" in
+        read-only)       args+=(--permission-mode plan) ;;
+        workspace-write) args+=(--permission-mode acceptEdits) ;;
+    esac
+    [ -n "$MODELLO" ] && args+=(--model "$MODELLO")
+    [ -n "$DIR" ] && args+=(--add-dir "$DIR")
+    if [ "$modo" = "continua" ]; then
+        if [ -n "$SESSIONE" ]; then args+=(--resume "$SESSIONE"); else args+=(--continue); fi
+    fi
+
+    local brief="$BRIEF"
+    if [ -n "$SCHEMA" ]; then
+        # `claude -p` non ha un equivalente di --output-schema: lo schema si
+        # chiede nel brief e si valida dopo. È una garanzia più debole, e va
+        # detto invece che lasciato credere.
+        brief="$brief
+
+FORMATO OBBLIGATORIO: rispondi con SOLO un oggetto JSON conforme a questo
+schema. Niente testo prima o dopo, niente blocco di codice.
+$(cat "$SCHEMA")"
+    fi
+    [ -n "$IMMAGINI" ] && giallo "! l'esecutore claude qui non prende immagini: --immagine ignorato"
+
+    { printf 'claude'; for a in "${args[@]}"; do printf ' %q' "$a"; done; printf '\n'; } > "$CARTELLA/comando.txt"
+    if [ "$PROVA" = "si" ]; then
+        cat "$CARTELLA/comando.txt"
+        rm -rf "$CARTELLA"
+        return 0
+    fi
+
+    [ "$SILENZIOSO" = "si" ] || nota "→ Claude al lavoro (${SANDBOX}${DIR:+, in $(basename "$DIR")})…"
+
+    local inizio fine esito
+    inizio="$(date +%s)"
+    printf '%s' "$brief" > "$CARTELLA/.stdin"
+    con_guinzaglio "$TIMEOUT" \
+        env REGIA_BRIEF="$CARTELLA/.stdin" REGIA_CWD="${DIR:-$PWD}" \
+        bash -c 'cd "$REGIA_CWD" && exec claude "$@" < "$REGIA_BRIEF"' _ "${args[@]}" \
+        > "$CARTELLA/eventi.jsonl" 2> "$CARTELLA/errori.txt"
+    esito=$?
+    fine="$(date +%s)"
+    rm -f "$CARTELLA/.stdin"
+
+    local sessione=""
+    if [ -s "$CARTELLA/eventi.jsonl" ]; then
+        sessione="$(jq -r '.session_id // empty' "$CARTELLA/eventi.jsonl" 2>/dev/null | head -1)"
+        jq -r '.result // empty' "$CARTELLA/eventi.jsonl" > "$risposta" 2>/dev/null
+        # a volte incornicia il JSON in un blocco di codice malgrado le istruzioni
+        if [ -n "$SCHEMA" ] && ! jq empty "$risposta" 2>/dev/null; then
+            sed -e '/^```/d' "$risposta" > "$risposta.pulito" && mv "$risposta.pulito" "$risposta"
+        fi
+        # `claude -p` esce 0 anche quando dichiara l'errore nel JSON
+        if [ "$esito" -eq 0 ] && [ "$(jq -r '.is_error // false' "$CARTELLA/eventi.jsonl" 2>/dev/null)" = "true" ]; then
+            esito=1
+            jq -r '.result // empty' "$CARTELLA/eventi.jsonl" >> "$CARTELLA/errori.txt" 2>/dev/null
+        fi
+    fi
+
+    concludi "$CARTELLA" "$risposta" "$esito" "$((fine - inizio))" "$sessione" "$modo"
+}
+
+# La coda comune ai due canali: scrive i metadati, giudica l'esito e stampa.
+concludi() {
+    local CARTELLA="$1" risposta="$2" esito="$3" secondi="$4" sessione="$5" modo="$6"
+
+    jq -n \
+        --arg lavoro "$(basename "$CARTELLA")" \
+        --arg modo "$modo" \
+        --arg esecutore "$ESECUTORE" \
+        --arg modello "${MODELLO:-predefinito}" \
+        --arg sforzo "$SFORZO" \
+        --arg sandbox "$SANDBOX" \
+        --arg dir "${DIR:-}" \
+        --arg schema "${SCHEMA:-}" \
+        --arg sessione "$sessione" \
+        --arg tag "$TAG" \
+        --arg cwd "${DIR:-$PWD}" \
+        --argjson secondi "$secondi" \
+        --argjson esito "$esito" \
+        '{lavoro:$lavoro, modo:$modo, esecutore:$esecutore, modello:$modello, sforzo:$sforzo,
+          sandbox:$sandbox, cartella_lavoro:$dir, cwd:$cwd, schema:$schema, sessione:$sessione,
+          tag:$tag, secondi:$secondi, esito:$esito}' > "$CARTELLA/meta.json"
+
+    if [ "$esito" -eq 124 ]; then
+        rosso "tempo scaduto dopo ${TIMEOUT}s — traccia in $CARTELLA"
+        nota  "Rimedi: --timeout più alto, --sforzo più basso, oppure un brief più stretto."
+        exit 4
+    fi
+    if [ "$esito" -ne 0 ]; then
+        rosso "l'esecutore è fallito (codice $esito) — traccia in $CARTELLA"
+        # l'uscita 1 copre cause diversissime: l'unica diagnosi sta in stderr
+        if grep -qi '401\|Unauthorized\|Not logged in\|Invalid API key' "$CARTELLA/errori.txt" 2>/dev/null; then
+            if [ "$ESECUTORE" = "claude" ]; then
+                rosso "sembra un problema di autenticazione. Rimedio: claude login"
+            else
+                rosso "sembra un problema di autenticazione."
+                nota  "  Con un browser qui:  codex login"
+                nota  "  Su una macchina remota o senza browser, il codice a schermo"
+                nota  "  tiene l'abbonamento:  scripts/regia-setup.sh --device"
+            fi
+        fi
+        grep -iE 'error|warning' "$CARTELLA/errori.txt" 2>/dev/null | sort -u | sed -n '1,8p' >&2
+        exit 5
+    fi
+    if [ ! -s "$risposta" ]; then
+        rosso "l'esecutore non ha prodotto risposta — traccia in $CARTELLA"
+        exit 5
+    fi
+    if [ -n "$SCHEMA" ]; then
+        jq empty "$risposta" 2>/dev/null || { rosso "la risposta non è JSON valido — $risposta"; exit 6; }
+    fi
+
+    # Attenzione: codex esce 0 anche quando la sandbox ha rifiutato tutto.
+    # Il codice d'uscita non basta: va cercato il rifiuto nella traccia.
+    if grep -qi 'blocked by read-only sandbox\|writing outside of the project\|rejected by user approval' \
+            "$CARTELLA/errori.txt" "$CARTELLA/eventi.jsonl" 2>/dev/null; then
+        giallo "! la sandbox ha respinto almeno una scrittura: la risposta può descrivere"
+        giallo "  un lavoro che sul disco non è mai avvenuto. Controlla i file prima di fidarti."
+    fi
+
+    cat "$risposta"
+    [ -n "$(tail -c 1 "$risposta")" ] && printf '\n'
+    [ "$SILENZIOSO" = "si" ] || nota "
+· lavoro: $(basename "$CARTELLA")  ·  ${secondi}s  ·  esecutore: $ESECUTORE  ·  traccia: $CARTELLA"
+}
+
+# ---------------------------------------------------------- sottocomandi ----
+
+comando_check() {
+    local problemi=0
+    risolvi_esecutore
+    nota "· esegue: $ESECUTORE   (si cambia con --esecutore, o per sempre con: gpt esecutore <nome>)"
+    if [ "$ESECUTORE" = "claude" ]; then
+        if command -v claude >/dev/null 2>&1; then
+            verde "✓ claude presente: $(command -v claude) ($(claude --version 2>/dev/null))"
+        else
+            rosso "✗ la CLI claude non è installata, ma è l'esecutore scelto."
+            problemi=1
+        fi
+        command -v jq >/dev/null 2>&1 || { rosso "✗ manca jq"; problemi=1; }
+        prepara_registro
+        nota "· registro dei lavori: $LAVORI ($(ls -1 "$LAVORI" 2>/dev/null | wc -l | tr -d ' ') finora)"
+        if [ "$problemi" -eq 0 ]; then verde "canale pronto."; return 0; fi
+        exit 3
+    fi
+    if esiste_codex; then
+        verde "✓ codex presente: $(command -v codex) ($(codex --version 2>/dev/null))"
+    else
+        rosso "✗ codex non installato.  Rimedio:  npm install -g @openai/codex"
+        problemi=1
+    fi
+    if esiste_codex; then
+        local stato
+        stato="$(codex login status 2>&1)"
+        case "$stato" in
+            *"ChatGPT"*)  verde "✓ autenticato: $stato" ;;
+            *"API key"*)  giallo "! autenticato con chiave API: $stato (si paga a consumo)" ;;
+            *)            rosso "✗ non autenticato: $stato"
+                          nota  "  Rimedio:  codex login"
+                          problemi=1 ;;
+        esac
+    fi
+    command -v jq >/dev/null 2>&1 || { rosso "✗ manca jq"; problemi=1; }
+
+    local conf="$HOME/.codex/config.toml"
+    if [ -f "$conf" ]; then
+        local mod
+        mod="$(grep -E '^model *=' "$conf" | head -1 | cut -d'"' -f2)"
+        nota "· modello predefinito del sistema: ${mod:-non dichiarato} (questa skill lo può cambiare con --modello)"
+        if grep -Eq '^sandbox_mode *= *"danger-full-access"' "$conf"; then
+            giallo "! il config globale di codex ha sandbox_mode = danger-full-access"
+            nota   "  Questa skill passa sempre --sandbox esplicito, quindi non lo eredita."
+        fi
+    fi
+
+    prepara_registro
+    local n
+    n="$(ls -1 "$LAVORI" 2>/dev/null | wc -l | tr -d ' ')"
+    nota "· registro dei lavori: $LAVORI ($n finora)"
+
+    if [ "$problemi" -eq 0 ]; then
+        verde "canale pronto."
+        return 0
+    fi
+    exit 3
+}
+
+comando_chiedi() {
+    leggi_opzioni "$@"
+    SANDBOX="read-only"    # 'chiedi' non scrive mai: è una promessa di SKILL.md
+    carica_brief; valida_sforzo; valida_sandbox; valida_dir
+    verifica_esecutore
+    esegui "$(nuovo_lavoro "${TAG:-chiedi}")" nuovo
+}
+
+comando_json() {
+    leggi_opzioni "$@"
+    [ -n "$SCHEMA" ] || muori "'json' richiede --schema FILE" 2
+    SANDBOX="read-only"    # come 'chiedi'
+    carica_brief; valida_sforzo; valida_sandbox; valida_dir
+    verifica_esecutore
+    esegui "$(nuovo_lavoro "${TAG:-json}")" nuovo
+}
+
+comando_lavora() {
+    SANDBOX="workspace-write"
+    TIMEOUT=900
+    leggi_opzioni "$@"
+    [ -n "$DIR" ] || muori "'lavora' richiede --dir CARTELLA: l'esecutore scrive solo lì dentro" 2
+    carica_brief; valida_sforzo; valida_sandbox; valida_dir
+    verifica_esecutore
+    esegui "$(nuovo_lavoro "${TAG:-lavora}")" nuovo
+}
+
+comando_rivedi() {
+    leggi_opzioni "$@"
+    SANDBOX="read-only"
+    carica_brief; valida_sforzo; valida_dir
+    verifica_esecutore
+    esegui "$(nuovo_lavoro "${TAG:-rivedi}")" nuovo
+}
+
+comando_continua() {
+    leggi_opzioni "$@"
+    if [ "$ULTIMO" != "si" ] && [ -z "$SESSIONE" ]; then
+        muori "'continua' richiede --ultimo oppure --sessione ID" 2
+    fi
+    if [ "$ULTIMO" = "si" ] && [ -z "$SESSIONE" ]; then
+        local contesto trovato quale
+        contesto="${DIR:-$PWD}"
+        [ -n "$DIR" ] && contesto="$(cd "$DIR" 2>/dev/null && pwd)"
+        if trovato="$(ultima_sessione "$contesto")"; then
+            SESSIONE="$(printf '%s' "$trovato" | cut -f1)"
+            quale="$(printf '%s' "$trovato" | cut -f2)"
+            ULTIMO="no"
+            if [ "$SILENZIOSO" != "si" ]; then
+                nota "· riprendo «$quale»"
+                # la prima riga del brief precedente: se non è quello che
+                # ti aspetti, stai per continuare la conversazione sbagliata
+                nota "  era: $(head -1 "$LAVORI/$quale/brief.md" 2>/dev/null | cut -c1-70)"
+            fi
+        else
+            rosso "nessuna sessione di questa cartella da riprendere ($contesto)."
+            nota  "Il registro è unico per tutta la macchina: riprendere «l'ultima» in"
+            nota  "assoluto significherebbe rischiare la conversazione di un altro lavoro."
+            nota  "Scegli l'id esatto:  gpt lavori   poi   gpt continua --sessione <uuid>"
+            exit 2
+        fi
+    fi
+    carica_brief; valida_sforzo; valida_sandbox; valida_dir
+    verifica_esecutore
+    esegui "$(nuovo_lavoro "${TAG:-continua}")" continua
+}
+
+comando_squadra() {
+    leggi_opzioni "$@"
+    verifica_esecutore
+    valida_sforzo; valida_sandbox; valida_dir
+    local elenco
+    elenco="$(printf '%s\n' "$BRIEFS" | sed '/^$/d')"
+    [ -n "$elenco" ] || muori "'squadra' richiede uno o più --brief FILE" 2
+
+    prepara_registro
+    local banco
+    banco="$(mktemp -d "${TMPDIR:-/tmp}/regia-squadra.XXXXXX")"
+
+    # i percorsi possono contenere spazi: niente word splitting, si legge riga per riga
+    local n=0
+    printf '%s\n' "$elenco" > "$banco/elenco"
+    while IFS= read -r f; do
+        [ -n "$f" ] || continue
+        [ -f "$f" ] || { rm -rf "$banco"; muori "brief non trovato: $f" 2; }
+        n=$((n + 1))
+    done < "$banco/elenco"
+    [ "$n" -gt 0 ] || { rm -rf "$banco"; muori "nessun brief valido" 2; }
+
+    local -a comuni
+    comuni=(--sforzo "$SFORZO" --sandbox "$SANDBOX" --timeout "$TIMEOUT" --silenzioso)
+    [ -n "$DIR" ]     && comuni+=(--dir "$DIR")
+    [ -n "$MODELLO" ] && comuni+=(--modello "$MODELLO")
+    [ -n "$SCHEMA" ]  && comuni+=(--schema "$SCHEMA")
+    [ "$CONSAPEVOLE" = "si" ] && comuni+=(--consapevole)
+    risolvi_esecutore; comuni+=(--esecutore "$ESECUTORE")
+    # senza questo, `squadra --prova` chiamerebbe il modello N volte
+    # convinta di stare facendo una prova a secco
+    [ "$PROVA" = "si" ] && comuni+=(--prova)
+
+    nota "→ squadra di $n esecutori (max $PARALLELE in parallelo)…"
+    local i=0 attivi=0
+    while IFS= read -r f; do
+        [ -n "$f" ] || continue
+        i=$((i + 1))
+        (
+            nome="$(basename "$f" | sed 's/\.[^.]*$//')"
+            "$0" "${SOTTO_SQUADRA:-chiedi}" --file "$f" --tag "$nome" "${comuni[@]}" \
+                 > "$banco/$i.out" 2> "$banco/$i.err"
+            printf '%s' "$?" > "$banco/$i.esito"
+            printf '%s' "$nome" > "$banco/$i.nome"
+        ) &
+        attivi=$((attivi + 1))
+        if [ "$attivi" -ge "$PARALLELE" ]; then wait; attivi=0; fi
+    done < "$banco/elenco"
+    wait
+
+    nota ""
+    nota "squadra rientrata:"
+    local k=1 falliti=0
+    while [ "$k" -le "$n" ]; do
+        local nome esito
+        nome="$(cat "$banco/$k.nome" 2>/dev/null || echo "brief-$k")"
+        esito="$(cat "$banco/$k.esito" 2>/dev/null || echo 1)"
+        if [ "$esito" = "0" ]; then
+            verde "  ✓ $nome"
+            printf '\n===== %s =====\n' "$nome"
+            cat "$banco/$k.out"
+        else
+            rosso "  ✗ $nome (codice $esito)"
+            sed -n '1,6p' "$banco/$k.err" >&2
+            falliti=$((falliti + 1))
+        fi
+        k=$((k + 1))
+    done
+    rm -rf "$banco"
+    [ "$falliti" -eq 0 ] || exit 5
+}
+
+comando_lavori() {
+    leggi_opzioni "$@"
+    prepara_registro
+    local d
+    ls -1t "$LAVORI" 2>/dev/null | head -n "$QUANTI" | while read -r d; do
+        [ -d "$LAVORI/$d" ] || continue
+        if [ -f "$LAVORI/$d/meta.json" ]; then
+            jq -r '"\(.lavoro)\t\(.modo)\t\(.sforzo)\t\(.secondi)s\t\(if .esito == 0 then "ok" else "FALLITO" end)"' \
+                "$LAVORI/$d/meta.json" 2>/dev/null
+        else
+            printf '%s\t(incompleto)\n' "$d"
+        fi
+    done | column -t -s "$(printf '\t')" 2>/dev/null || true
+}
+
+comando_mostra() {
+    local quale="${1:-}"
+    [ -n "$quale" ] || muori "uso: gpt mostra ID-DEL-LAVORO (vedi 'gpt lavori')" 2
+    local c="$LAVORI/$quale"
+    [ -d "$c" ] || muori "lavoro non trovato: $quale" 2
+    printf '===== BRIEF =====\n'
+    cat "$c/brief.md" 2>/dev/null
+    printf '\n===== RISPOSTA =====\n'
+    cat "$c/risposta.md" "$c/risposta.json" 2>/dev/null
+    printf '\n===== META =====\n'
+    cat "$c/meta.json" 2>/dev/null
+}
+
+uso() {
+    sed -n '3,30p' "$0" | sed 's/^# \{0,1\}//'
+}
+
+# ----------------------------------------------------------------- avvio ----
+
+[ $# -gt 0 ] || { uso; exit 2; }
+SOTTOCOMANDO="$1"; shift
+
+prepara_registro
+
+case "$SOTTOCOMANDO" in
+    check|controlla)  comando_check ;;
+    chiedi|ask)       comando_chiedi "$@" ;;
+    json)             comando_json "$@" ;;
+    lavora)           comando_lavora "$@" ;;
+    rivedi)           comando_rivedi "$@" ;;
+    continua)         comando_continua "$@" ;;
+    squadra)          comando_squadra "$@" ;;
+    lavori)           comando_lavori "$@" ;;
+    mostra)           comando_mostra "$@" ;;
+    esecutore)        comando_esecutore "$@" ;;
+    versione)         echo "gpt $VERSIONE" ;;
+    -h|--help|help)   uso ;;
+    *)                muori "sottocomando sconosciuto: $SOTTOCOMANDO" 2 ;;
+esac

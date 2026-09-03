@@ -28,6 +28,11 @@
       "name": "nas-synology",
       "source": "./skills/nas-synology",
       "description": "Accede a un NAS Synology DSM 7 e lo gestisce: stato dischi e volumi, file, pacchetti, backup, log. Funziona da Mac (API + SSH) e da cellulare (solo API)."
+    },
+    {
+      "name": "regia",
+      "source": "./skills/regia",
+      "description": "Fa eseguire il lavoro all'altro modello mentre tu fai la regia: da Claude delega a ChatGPT (CLI codex), da Codex delega a Claude. Brief, schemi JSON, esecuzione in parallelo, contraddittorio, registro dei lavori."
     }
   ]
 }
