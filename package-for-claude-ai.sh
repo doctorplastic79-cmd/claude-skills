@@ -71,7 +71,9 @@ if [ "${#RECOVERABLE[@]}" -gt 0 ]; then
   ' "$SRC/SKILL.md" > "$WORK/$SKILL/SKILL.md"
 fi
 
-BYTES="$(find "$WORK/$SKILL" -type f -printf '%s\n' | awk '{s+=$1} END {print s+0}')"
+# `find -printf` è GNU: su macOS non esiste e la somma veniva sempre 0, cioè
+# il controllo del limite non controllava niente. Questa forma vale su entrambi.
+BYTES="$(find "$WORK/$SKILL" -type f -print0 | xargs -0 cat | wc -c | tr -d ' ')"
 LIMIT=$((30 * 1024 * 1024))
 awk -v b="$BYTES" 'BEGIN { printf "non compresso: %.1f MB\n", b/1048576 }'
 if [ "$BYTES" -ge "$LIMIT" ]; then

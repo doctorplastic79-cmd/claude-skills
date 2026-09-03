@@ -12,6 +12,7 @@ riutilizzabili e non appesantiscono il codice delle applicazioni.
 | `skills/heygen-video` | genera video HeyGen con presenter, dall'idea allo script al video finito |
 | `skills/heygen-translate` | traduce e doppia un video esistente in un'altra lingua, con voice cloning e lip-sync |
 | `skills/nas-synology` | entra nel NAS Synology e lo gestisce: dischi, spazio, file, pacchetti, backup, log |
+| `skills/regia` | fa eseguire il lavoro all'altro modello mentre tu fai la regia: brief, schemi JSON, esecuzione in parallelo, contraddittorio, registro |
 | `skills/cloud-ordinato` | mette in ordine il cloud di Claude Code: sessioni da archiviare, lavori da compattare, Routine che consumano a vuoto |
 
 | Preset | A cosa serve |
@@ -190,6 +191,62 @@ RAID, rete, account e spegnimento restano fuori dalla portata della skill e
 vanno fatte da DSM. `NAS_READONLY=1` mette tutto in sola lettura. Dettagli in
 `skills/nas-synology/references/`.
 
+## Skill Regia
+
+`regia` divide il lavoro fra i due modelli: chi la usa scrive il brief, sceglie
+il formato della risposta, verifica e integra; a eseguire è **l'altro** modello.
+Da Claude Code delega a ChatGPT tramite la CLI ufficiale `codex`; installata
+sotto `~/.codex/skills/` fa il contrario e delega a Claude (`claude -p`). La
+scelta è automatica e viene dal percorso in cui la skill è installata, quindi
+la stessa copia funziona in tutti e due i versi senza configurazione.
+
+In entrambi i casi si usa l'abbonamento, non una chiave API: nessun costo a
+token. Il prerequisito è la CLI dell'esecutore, autenticata una volta sola:
+
+```bash
+npm install -g @openai/codex && codex login    # per delegare a ChatGPT
+```
+
+### Fuori dal Mac
+
+Il canale ha bisogno della CLI dell'esecutore, autenticata. Dove c'è un
+browser basta `codex login`, una volta. Dove non c'è — sessione cloud,
+container, ambiente aperto dal telefono — c'è uno script che installa,
+autentica e chiude con una chiamata vera:
+
+```bash
+skills/regia/scripts/regia-setup.sh --device   # codice a schermo
+skills/regia/scripts/regia-setup.sh            # usa $OPENAI_API_KEY
+```
+
+`--device` mostra un indirizzo e un codice: li approvi da un browser
+qualsiasi, anche dal telefono, e la macchina remota **eredita l'abbonamento**,
+senza pagare a token. La via con `OPENAI_API_KEY` non è interattiva ed è
+quella per un setup script che gira da solo alla creazione dell'ambiente, ma
+lì **si paga a consumo**. In un setup script di un cloud environment:
+
+```bash
+#!/bin/bash
+git clone --depth 1 https://github.com/doctorplastic79-cmd/claude-skills.git \
+  /opt/claude-skills || true
+/opt/claude-skills/install.sh || true
+OPENAI_API_KEY="$OPENAI_API_KEY" \
+  /opt/claude-skills/skills/regia/scripts/regia-setup.sh || true
+```
+
+`skills/regia/scripts/gpt check` dice chi esegue e se il canale è pronto;
+`skills/regia/tests/run-tests.sh` esegue 51 prove senza consumare l'abbonamento
+(con `--vivo` aggiunge una chiamata vera).
+
+Ogni lavoro lascia in `~/.regia/lavori/` brief, risposta, eventi e metadati,
+con permessi `700`: serve a verificare a posteriori che cosa è stato chiesto e
+che cosa è tornato. Quello che entra nel brief esce dalla macchina, e il
+controllo automatico sui segreti guarda il brief ma **non** i file che
+l'esecutore legge da `--dir`: quella parte resta giudizio di chi la usa.
+
+Dove non c'è una shell — per esempio in una sessione di chat su claude.ai — la
+skill non ha canale e lo dice, invece di fingere di aver delegato.
+
 ## Skill cloud ordinato
 
 `cloud-ordinato` riordina il cloud di Claude Code: le sessioni (le chat aperte
@@ -230,6 +287,7 @@ Ogni skill mantiene la licenza originale, nel file `LICENSE` della sua cartella.
   `skills/video-shotcraft/assets/audio/ATTRIBUTION.md`.
 - `heygen-avatar`, `heygen-video`, `heygen-translate` — MIT, di
   [HeyGen](https://github.com/heygen-com/skills).
+- `regia` — MIT, di Dario Palazzolo.
 - `nas-synology` — MIT, scritta per questo repository.
 - `cloud-ordinato` — MIT, scritta per questo repository.
 
