@@ -94,7 +94,11 @@ prova "con --giorni 1 archivia anche le sessioni di ieri" \
 echo "== routine: dove sta il consumo vero =="
 prova "routine attiva e fallita in cima al piano" \
   "trig_FALLISCE_OGNI_GIORNO" "${PIANO[@]}"
-prova "e la ragione e' detta" "brucia token" "${ANALIZZA[@]}"
+prova "prima di spegnerla si legge il motivo" \
+  "leggi il motivo prima di toccarla" "${ANALIZZA[@]}"
+prova "il piano dice su quale sessione leggerlo" "get_session cse_ABC" "${PIANO[@]}"
+prova "e distingue il limite d'uso dall'errore vero" \
+  "NON e' spreco" "${PIANO[@]}"
 prova "one-shot gia' scattata: eliminabile" \
   "delete_trigger trig_ONESHOT_SCATTATA" "${PIANO[@]}"
 prova "routine morta con la sessione: eliminabile" \

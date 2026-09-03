@@ -28,6 +28,21 @@ misurabile. Segnali:
 Le Routine gia' `enabled: false` o con un `ended_reason` **non consumano nulla**:
 eliminarle e' ordine, non risparmio. Dirlo.
 
+### Il caso che sembra spreco e non lo e'
+
+`last_run.status: FAILED` da solo non dice niente. Il motivo sta nel
+`post_turn_summary.status_detail` della sessione che ha eseguito lo scatto
+(`get_session` su `last_run.session_id`), e cambia completamente la conclusione:
+
+| status_detail | Cosa e' successo | Cosa fare |
+|---|---|---|
+| "You've hit your weekly / session limit" (`rate_limit_info.status: rejected`) | lo scatto e' stato **rifiutato prima di partire**: nessun modello e' girato, costo circa zero | non spegnerla. E' una spia: la quota se la sta prendendo altro, di solito il lavoro interattivo |
+| connettore scollegato, strumento mancante, prompt che non sta in piedi | il modello ha girato e ha prodotto un errore | **questo si' che consuma a ogni scatto**: correggere o spegnere |
+
+Spegnere una Routine perche' e' stata rifiutata per limite d'uso non fa
+risparmiare niente e toglie all'utente una cosa che gli serviva: e' il tipo di
+"ottimizzazione" che questa skill esiste per non fare.
+
 ### 2. Riprendere una sessione con il contesto pieno
 
 Il contesto di una sessione viene ripagato a ogni turno. Una sessione a 800.000

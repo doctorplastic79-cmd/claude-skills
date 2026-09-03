@@ -54,15 +54,26 @@ vuoto".
 | `ended_reason: auto_disabled_*` | `elimina` — si e' spenta da sola |
 | `suspension_reason` presente | `chiedi` — sospensione temporanea, si riattiva da sola |
 | disattivata a mano | `chiedi` — solo l'utente sa se la riprendera' |
-| **attiva + `last_run: FAILED`** | **`ripara`** — l'unico caso che fa risparmiare davvero |
+| **attiva + `last_run: FAILED`** | **`ripara`** — da guardare per primo, ma il motivo va letto prima di agire |
 | attiva, cron, dentro una sessione fissa | `verifica` — la sessione bersaglio potrebbe non esistere piu' |
 | attiva, e' scattata ma senza esito | `verifica` |
 | attiva e sana | `tieni` |
 
-`ripara` non vuol dire spegnere: prima si legge l'errore dell'ultima esecuzione.
-Una Routine che fallisce per un connettore scollegato si sistema riconnettendo,
-non cancellandola. `update_trigger enabled: false` e' la seconda scelta,
-`delete_trigger` la terza, e fa perdere la cronologia.
+`ripara` non vuol dire spegnere. `list_triggers` dice **che** l'ultimo scatto e'
+fallito, mai **perche'**: il motivo sta in `get_session` sulla sessione
+dell'esecuzione (`last_run.session_id`), campo `post_turn_summary.status_detail`.
+Due esiti opposti:
+
+- **limite d'uso raggiunto** ("You've hit your weekly / session limit",
+  `rate_limit_info.status: rejected`) - lo scatto e' stato rifiutato prima di
+  partire, non ha consumato niente. Spegnerla non fa risparmiare e toglie
+  all'utente una cosa che gli serve. E' invece la spia che la quota se la sta
+  prendendo il lavoro interattivo.
+- **errore vero** (connettore scollegato, strumento mancante, prompt rotto) - il
+  modello e' girato per produrre un errore, e lo rifara' a ogni scatto. Qui si
+  interviene: riconnettere se e' un connettore, `update_trigger prompt` se e' il
+  testo, `update_trigger enabled: false` come seconda scelta. `delete_trigger`
+  e' la terza e fa perdere la cronologia.
 
 ## Il blocco delle piu' costose
 

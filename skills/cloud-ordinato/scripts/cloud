@@ -256,6 +256,7 @@ def leggi_routine(t):
         "ultimo_esito": (ultimo.get("status") or "").replace("ROUTINE_RUN_STATUS_", "").lower(),
         "sessione_fissa": bool(t.get("persist_session")) or bool(t.get("persistent_session_id")),
         "modello": derivato.get("model") or "",
+        "ultima_sessione": ultimo.get("session_id") or "",
         "prompt_caratteri": len(prompt),
     }
 
@@ -270,7 +271,8 @@ def valuta_routine(v):
     if not v["attiva"] and not v["finita_perche"]:
         return "chiedi", "in pausa: eliminarla o riprenderla e' una scelta dell'utente"
     if v["attiva"] and v["ultimo_esito"] == "failed":
-        return "ripara", "ATTIVA e l'ultimo scatto e' FALLITO: brucia token a ogni esecuzione senza produrre niente"
+        return "ripara", ("ATTIVA e l'ultimo scatto e' FALLITO: leggi il motivo prima di toccarla"
+                          " (get_session su last_run.session_id)")
     if v["attiva"] and v["sessione_fissa"] and v["cron"]:
         return "verifica", "scatta a ripetizione dentro una sessione fissa: controlla che quella sessione esista ancora"
     if v["attiva"] and not v["ultimo_esito"] and v["ultimo_scatto"]:
@@ -363,15 +365,21 @@ def cmd_piano(args):
     print("=" * 60)
     print()
 
-    print("1. ROUTINE CHE CONSUMANO SENZA PRODURRE  -  guadagno reale di token")
+    print("1. ROUTINE ATTIVE CON L'ULTIMO SCATTO FALLITO  -  guarda prima il motivo")
     rip = per_azione_r.get("ripara", [])
     if not rip:
         print("   nessuna: nessuna routine attiva risulta fallita all'ultimo scatto.")
     for v, motivo in rip:
+        sessione = (v["ultima_sessione"] or "?")
         print("   [%s] %s" % (v["id"], v["nome"]))
         print("      cadenza %s, modello %s, ultimo esito FALLITO" % (v["cron"] or "una volta", v["modello"] or "?"))
-        print("      -> leggi l'errore dell'ultima esecuzione, poi: correggi il prompt")
-        print("         (update_trigger) oppure spegnila (update_trigger enabled:false).")
+        print("      -> get_session %s   e leggi post_turn_summary.status_detail:" % sessione)
+        print("         limite d'uso raggiunto ('hit your weekly/session limit') -> NON e' spreco,")
+        print("           lo scatto e' stato rifiutato prima di partire: non spegnerla, e' la")
+        print("           spia che la quota se la sta prendendo altro.")
+        print("         errore vero (connettore, prompt, strumento) -> quello si' che consuma")
+        print("           a ogni scatto: correggi (update_trigger prompt) o spegni")
+        print("           (update_trigger enabled:false).")
     print()
 
     print("2. ROUTINE RESIDUE  -  ordine, nessun risparmio")

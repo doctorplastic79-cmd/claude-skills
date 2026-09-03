@@ -20,7 +20,8 @@ Non fingere risparmi che non ci sono. La verita', in tre righe:
 
 | Cosa | Consuma token? |
 |---|---|
-| Una Routine **attiva** che scatta ogni giorno | **si', a ogni scatto** — anche quando fallisce e non produce niente |
+| Una Routine **attiva** che scatta ogni giorno | **si', a ogni scatto** — anche quando finisce in errore |
+| Una Routine rifiutata per limite d'uso | **no**: lo scatto non e' mai partito |
 | Una sessione lasciata a meta' | **no**, finche' nessuno la riapre |
 | Riaprire una sessione con il contesto pieno | **si', a ogni turno**: si ripaga tutto il contesto |
 | 200 chat vecchie ferme li' | **no**: e' disordine, non consumo |
@@ -115,10 +116,16 @@ leggibile da nessuno strumento**. Non inventarne il contenuto.
 
 ### 5. Esegui, nell'ordine che rende
 
-1. **Routine rotte** — per ognuna: leggi l'errore dell'ultima esecuzione
-   (`last_run`), poi o correggi il prompt (`update_trigger prompt: ...`) o la
-   spegni (`update_trigger enabled: false`). Questo e' l'unico passo che
-   fa risparmiare token davvero.
+1. **Routine con l'ultimo scatto fallito** — `list_triggers` dice *che* e'
+   fallito, mai *perche'*. Per ognuna fai `get_session` su
+   `last_run.session_id` e leggi `post_turn_summary.status_detail`:
+   - **"You've hit your weekly / session limit"** — lo scatto e' stato
+     **rifiutato prima di partire**: non ha consumato niente, e spegnerla non fa
+     risparmiare. E' la spia che la quota se la sta prendendo il lavoro
+     interattivo: dillo all'utente e lascia la Routine dov'e'.
+   - **errore vero** (connettore scollegato, strumento mancante, prompt rotto) —
+     questo si' che consuma a ogni scatto: correggi (`update_trigger prompt`) o
+     spegni (`update_trigger enabled: false`).
 2. **Routine residue** — `delete_trigger` su quelle gia' scattate o
    auto-disattivate. Non toccare mai una Routine attiva e sana.
 3. **Archiviazioni** — `archive_session` una per una, a lotti di dieci, e conta
@@ -185,4 +192,4 @@ Dopo ogni modifica a `scripts/cloud`:
 tests/run-tests.sh
 ```
 
-42 prove su dump finti, nessuna tocca il cloud.
+44 prove su dump finti, nessuna tocca il cloud.
