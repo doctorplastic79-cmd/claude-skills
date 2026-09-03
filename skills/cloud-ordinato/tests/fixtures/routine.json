@@ -1,0 +1,13 @@
+{"data":[
+{"id":"trig_FALLISCE_OGNI_GIORNO","name":"Resoconto serale","cron_expression":"0 18 * * *","enabled":true,"next_run_at":"2026-09-03T18:00:00Z","created_at":"2026-07-22T16:03:59Z","updated_at":"2026-08-08T18:20:52Z","last_fired_at":"2026-09-02T18:07:42Z","notifications":{"channel":{"push":true,"email":true}},"created_via":"meta_mcp","derived_state":{"prompt":"Fai il resoconto della giornata e mandalo.","model":"claude-fable-5"},"last_run":{"status":"ROUTINE_RUN_STATUS_FAILED","fired_at":"2026-09-02T18:07:42Z","finished_at":"2026-09-02T18:07:53Z","session_id":"cse_ABC"}},
+
+{"id":"trig_SANA","name":"Brief mattutino","cron_expression":"0 5 * * 1-5","enabled":true,"next_run_at":"2026-09-04T05:05:39Z","created_at":"2026-08-11T11:11:06Z","updated_at":"2026-08-11T11:20:01Z","last_fired_at":"2026-09-03T05:08:32Z","derived_state":{"prompt":"Prepara il brief di oggi.","model":"claude-sonnet-5"},"last_run":{"status":"ROUTINE_RUN_STATUS_SUCCEEDED","fired_at":"2026-09-03T05:08:32Z","finished_at":"2026-09-03T05:10:12Z","session_id":"cse_DEF"}},
+
+{"id":"trig_RESIDUO_SESSIONE_SPARITA","name":"Ricontrolla PR #12","created_at":"2026-08-30T14:26:53Z","updated_at":"2026-08-30T15:27:43Z","persist_session":true,"run_once_at":"2026-08-30T15:27:00Z","ended_reason":"auto_disabled_session_gone","created_via":"meta_mcp","derived_state":{"prompt":"Check-in automatico sulla PR #12.","model":""}},
+
+{"id":"trig_ONESHOT_SCATTATA","name":"Promemoria una tantum","created_at":"2026-08-01T09:00:00Z","updated_at":"2026-08-01T10:00:00Z","persist_session":true,"run_once_at":"2026-08-01T10:00:00Z","ended_reason":"run_once_fired","derived_state":{"prompt":"Ricordami la cosa.","model":""}},
+
+{"id":"trig_IN_PAUSA","name":"Aggiorna la dashboard","cron_expression":"0 5-19/2 * * *","enabled":false,"next_run_at":"2026-07-25T17:00:29Z","created_at":"2026-07-22T15:53:48Z","updated_at":"2026-07-25T15:25:48Z","last_fired_at":"2026-07-25T15:00:42Z","derived_state":{"prompt":"Aggiorna la dashboard personale.","model":"claude-fable-5"},"last_run":{"status":"ROUTINE_RUN_STATUS_SUCCEEDED","fired_at":"2026-07-25T15:00:42Z","finished_at":"2026-07-25T15:03:14Z","session_id":"cse_GHI"}},
+
+{"id":"trig_SESSIONE_FISSA","name":"Check-in orario sul PR","cron_expression":"0 * * * *","enabled":true,"persist_session":true,"next_run_at":"2026-09-03T17:00:00Z","created_at":"2026-08-29T10:00:00Z","updated_at":"2026-08-29T10:00:00Z","derived_state":{"prompt":"Ricontrolla la PR.","model":"claude-opus-5"}}
+],"has_more":false}

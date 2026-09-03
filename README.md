@@ -12,6 +12,7 @@ riutilizzabili e non appesantiscono il codice delle applicazioni.
 | `skills/heygen-video` | genera video HeyGen con presenter, dall'idea allo script al video finito |
 | `skills/heygen-translate` | traduce e doppia un video esistente in un'altra lingua, con voice cloning e lip-sync |
 | `skills/nas-synology` | entra nel NAS Synology e lo gestisce: dischi, spazio, file, pacchetti, backup, log |
+| `skills/cloud-ordinato` | mette in ordine il cloud di Claude Code: sessioni da archiviare, lavori da compattare, Routine che consumano a vuoto |
 
 | Preset | A cosa serve |
 |---|---|
@@ -189,6 +190,37 @@ RAID, rete, account e spegnimento restano fuori dalla portata della skill e
 vanno fatte da DSM. `NAS_READONLY=1` mette tutto in sola lettura. Dettagli in
 `skills/nas-synology/references/`.
 
+## Skill cloud ordinato
+
+`cloud-ordinato` riordina il cloud di Claude Code: le sessioni (le chat aperte
+dal web, dal telefono, dal CLI) e le Routine programmate. Fa tre cose: archivia
+le sessioni concluse, prepara una scheda di ripresa per i lavori lasciati a
+meta' cosi' si riparte in una sessione nuova invece che dentro un contesto
+gonfio, e trova le Routine attive che scattano e falliscono - le uniche che
+consumino token davvero.
+
+```bash
+skills/cloud-ordinato/scripts/cloud piano dump-sessioni.json dump-routine.json --io <sessione corrente>
+```
+
+Lo script non chiama nessuna API: legge i dump di `list_sessions` e
+`list_triggers` - che pesano decine di migliaia di caratteri e non vanno letti
+in conversazione - e ne ricava un piano di azioni. Ad archiviare e spegnere ci
+pensa l'agente, dopo una conferma sola.
+
+Due limiti dichiarati invece che aggirati: una sessione **non si cancella**, si
+archivia (ed e' reversibile), e le conversazioni dell'app claude.ai non sono
+raggiungibili da nessuno strumento. Il conto onesto e' in
+`skills/cloud-ordinato/references/costi.md`: archiviare cento chat vecchie
+rimette ordine e libera container, il risparmio di token viene dalle Routine
+sistemate.
+
+```bash
+skills/cloud-ordinato/tests/run-tests.sh
+```
+
+42 prove su dump finti, nessuna tocca il cloud.
+
 ## Licenze
 
 Ogni skill mantiene la licenza originale, nel file `LICENSE` della sua cartella.
@@ -199,4 +231,5 @@ Ogni skill mantiene la licenza originale, nel file `LICENSE` della sua cartella.
 - `heygen-avatar`, `heygen-video`, `heygen-translate` — MIT, di
   [HeyGen](https://github.com/heygen-com/skills).
 - `nas-synology` — MIT, scritta per questo repository.
+- `cloud-ordinato` — MIT, scritta per questo repository.
 

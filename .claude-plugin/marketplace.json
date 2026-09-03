@@ -28,6 +28,11 @@
       "name": "nas-synology",
       "source": "./skills/nas-synology",
       "description": "Accede a un NAS Synology DSM 7 e lo gestisce: stato dischi e volumi, file, pacchetti, backup, log. Funziona da Mac (API + SSH) e da cellulare (solo API)."
+    },
+    {
+      "name": "cloud-ordinato",
+      "source": "./skills/cloud-ordinato",
+      "description": "Riordina il cloud di Claude Code: archivia le sessioni concluse, prepara la scheda di ripresa per i lavori a meta', trova le Routine che scattano e falliscono consumando token."
     }
   ]
 }
