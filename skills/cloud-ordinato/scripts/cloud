@@ -411,6 +411,10 @@ def cmd_piano(args):
     print()
 
     print("5. DA CONTROLLARE PRIMA DI TOCCARE")
+    if per_azione.get("verifica-pr"):
+        print("   Il ramo qui sotto e' quello che la sessione DICHIARA di aver prodotto.")
+        print("   Prima della PR verifica che esista davvero sul remoto (git ls-remote,")
+        print("   o list_branches): un ramo mai spinto e' lavoro perso col container.")
     resto = (per_azione.get("verifica-pr", []) + per_azione.get("chiedi", [])
              + per_azione.get("rinomina", []))
     if not resto:

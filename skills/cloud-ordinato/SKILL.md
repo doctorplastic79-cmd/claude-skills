@@ -152,10 +152,27 @@ Le schede vanno dove l'utente le ritrova: nel repository del progetto, o
 consegnate con `SendUserFile`. Se una sessione da compattare e' ancora
 connessa, chiedi prima all'utente: potrebbe averla aperta in questo momento.
 
-### 7. Rami e PR rimasti indietro (facoltativo)
+### 7. Rami e PR rimasti indietro
 
-Ogni sessione che ha prodotto lavoro lascia un ramo `claude/...`. Con gli
-strumenti GitHub trova quelli la cui PR e' merged o closed: sono residui.
+**`session_context.outcomes[].branches` e' cio' che la sessione dichiara, non la
+prova che il ramo esista.** Un ramo mai spinto non c'e' sul remoto, e quel lavoro
+e' morto insieme al container: non e' recuperabile, e non ha senso scrivere una
+scheda di ripresa per un ramo che non esiste. Prima di ragionare sui rami,
+prendi l'elenco vero — `git ls-remote --heads origin` sul repository clonato,
+`list_branches` sugli altri — e incrocialo con i rami dichiarati. Le tre
+categorie che escono sono diverse fra loro:
+
+| Situazione | Cosa vuol dire |
+|---|---|
+| ramo sul remoto, PR merged o closed | concluso: il ramo e' un residuo cancellabile |
+| ramo sul remoto, nessuna PR | lavoro consegnato che **non ha mai visto nessuno**: e' la scoperta che vale il riordino |
+| ramo dichiarato ma assente dal remoto | mai spinto: perso. Dillo, non fingere che sia recuperabile |
+
+Controlla anche che il ramo non sia **vuoto** (`git rev-list --count origin/main..RAMO`):
+un ramo fermo sullo stesso commit di `main` non contiene niente.
+
+Poi, sui residui: con gli strumenti GitHub trova quelli la cui PR e' merged o
+closed.
 **Cancellare un ramo non si annulla**: chiedi un via libera esplicito, separato
 da quello del punto 4, e non toccare mai un ramo con una PR aperta.
 
@@ -192,4 +209,4 @@ Dopo ogni modifica a `scripts/cloud`:
 tests/run-tests.sh
 ```
 
-44 prove su dump finti, nessuna tocca il cloud.
+45 prove su dump finti, nessuna tocca il cloud.

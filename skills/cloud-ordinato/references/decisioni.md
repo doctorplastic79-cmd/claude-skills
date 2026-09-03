@@ -35,6 +35,13 @@ Il ramo si legge in `session_context.outcomes`: e' il segnale che distingue
 "chat di prova" da "lavoro lasciato a meta'". Una sessione senza ramo non ha
 prodotto niente di recuperabile, e archiviarla non perde nulla.
 
+Attenzione pero': quel campo e' una **dichiarazione della sessione**, non una
+verifica. Capita spesso che il ramo non sia mai stato spinto - la sessione si e'
+fermata prima, o ha lavorato solo nel container - e allora sul remoto non c'e'
+niente. Lo script non puo' accorgersene: non parla con git. Il controllo lo fa
+l'agente, con `git ls-remote --heads` o `list_branches`, prima di trattare quel
+ramo come lavoro salvato.
+
 ### La soglia del 60% sul contesto
 
 Sotto quella quota riprendere la sessione conviene ancora: si porta dietro tutto

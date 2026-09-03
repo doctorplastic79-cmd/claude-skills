@@ -81,6 +81,8 @@ prova "sessione con PR aperta: da verificare, non da archiviare" \
   "archivia solo se la PR e' merged o closed" "${PIANO[@]}"
 nega "sessione con PR aperta mai archiviata al buio" \
   "archive_session session_PR_APERTA" "${PIANO[@]}"
+prova "avverte che il ramo dichiarato va verificato sul remoto" \
+  "un ramo mai spinto e' lavoro perso" "${PIANO[@]}"
 prova "titolo generico ma recente: rinomina, non archivia" \
   "titolo generico" "${PIANO[@]}"
 
