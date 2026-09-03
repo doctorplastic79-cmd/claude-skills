@@ -158,11 +158,17 @@ def leggi_sessione(s):
     meta = s.get("external_metadata") or {}
     ctx = meta.get("context_usage") or {}
     contesto = s.get("session_context") or {}
-    repo, rami = "", []
+    repos, rami = [], []
     for uscita in contesto.get("outcomes") or []:
         info = ((uscita or {}).get("git_repository") or {}).get("git_info") or {}
-        repo = repo or info.get("repo") or ""
-        rami += info.get("branches") or []
+        if info.get("repo") and info["repo"] not in repos:
+            repos.append(info["repo"])
+        for ramo in info.get("branches") or []:
+            if ramo not in rami:
+                rami.append(ramo)
+    repo = repos[0] if repos else ""
+    if len(repos) > 1:
+        repo += " (+%d repo)" % (len(repos) - 1)
     if not repo:
         for fonte in contesto.get("sources") or []:
             url = ((fonte or {}).get("git_repository") or {}).get("url") or ""
@@ -182,6 +188,7 @@ def leggi_sessione(s):
         "connessa": (s.get("connection_status") or "") == "connected",
         "giorni": _giorni_fa(s.get("updated_at") or s.get("created_at")),
         "repo": repo,
+        "repos": repos,
         "rami": rami,
         "contesto_usati": usati,
         "contesto_max": massimo,
@@ -217,7 +224,9 @@ def valuta_sessione(v, giorni, mia):
     if v["aspetta"] and vecchia:
         return "archivia", "aspetta da %d giorni una risposta che non e' arrivata" % v["giorni"]
     if v["esito"] == "review_ready" and ha_lavoro:
-        return "verifica-pr", "ha prodotto il ramo %s: archivia solo se la PR e' merged o closed" % v["rami"][0]
+        dove = " / ".join(v["repos"]) if v["repos"] else "?"
+        return "verifica-pr", "dichiara il ramo %s su %s: cerca il ramo li' e guarda la PR" % (
+            v["rami"][0], dove)
     if v["esito"] in ("blocked", "failed") and ha_lavoro:
         if vecchia:
             return "compatta", "lavoro non finito su %s, ferma da %d giorni: scheda di ripresa, poi archivia" % (v["rami"][0], v["giorni"])

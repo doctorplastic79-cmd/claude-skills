@@ -209,4 +209,4 @@ Dopo ogni modifica a `scripts/cloud`:
 tests/run-tests.sh
 ```
 
-45 prove su dump finti, nessuna tocca il cloud.
+46 prove su dump finti, nessuna tocca il cloud.

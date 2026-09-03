@@ -78,7 +78,9 @@ prova "lavoro non finito con un ramo: prima la scheda di ripresa" \
 prova "contesto oltre il 60%: da compattare" \
   "contesto al 83%" "${PIANO[@]}"
 prova "sessione con PR aperta: da verificare, non da archiviare" \
-  "archivia solo se la PR e' merged o closed" "${PIANO[@]}"
+  "cerca il ramo li' e guarda la PR" "${PIANO[@]}"
+prova "una sessione su piu' repo li elenca tutti" \
+  "tizio/skills / tizio/altro" "${PIANO[@]}"
 nega "sessione con PR aperta mai archiviata al buio" \
   "archive_session session_PR_APERTA" "${PIANO[@]}"
 prova "avverte che il ramo dichiarato va verificato sul remoto" \

@@ -276,7 +276,7 @@ sistemate.
 skills/cloud-ordinato/tests/run-tests.sh
 ```
 
-45 prove su dump finti, nessuna tocca il cloud.
+46 prove su dump finti, nessuna tocca il cloud.
 
 ## Licenze
 
