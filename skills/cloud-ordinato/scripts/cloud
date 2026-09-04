@@ -1,0 +1,547 @@
+#!/usr/bin/env python3
+"""Analizza l'inventario del cloud Claude Code e propone un piano di riordino.
+
+Non chiama nessuna API: legge i dump JSON prodotti dagli strumenti MCP
+`list_sessions` e `list_triggers` e li trasforma in una tabella compatta piu'
+un piano di azioni. Serve a questo: quei due strumenti restituiscono anche
+100.000 caratteri per pagina (i prompt interi di ogni Routine), e leggerli in
+conversazione costa piu' token di tutto il riordino messo insieme.
+
+Uso:
+    cloud analizza dump1.json dump2.json      # tabella sessioni + routine
+    cloud piano dump1.json dump2.json         # piano di azioni eseguibile
+    cloud scheda dump.json --id session_xxx   # scheda di ripresa da compilare
+
+Opzioni comuni:
+    --giorni N     soglia di inattivita' per considerare vecchia una sessione (14)
+    --io ID        id della sessione corrente: non viene mai proposta per l'archiviazione
+    --json         output JSON invece della tabella
+"""
+
+import argparse
+import json
+import os
+import re
+import sys
+from datetime import datetime, timezone
+
+# Normalmente "adesso" e' adesso. CLOUD_ADESSO fissa l'orologio: serve alle
+# prove, perche' l'eta' delle sessioni di prova non deve cambiare col tempo.
+def _adesso():
+    fisso = os.environ.get("CLOUD_ADESSO", "").strip()
+    if fisso:
+        testo = fisso.replace("Z", "+00:00")
+        try:
+            dt = datetime.fromisoformat(testo)
+        except ValueError:
+            sys.exit("CLOUD_ADESSO non e' una data ISO valida: %s" % fisso)
+        return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+    return datetime.now(timezone.utc)
+
+
+ADESSO = _adesso()
+
+
+# --- lettura dei dump -------------------------------------------------------
+
+def _oggetti_json(testo):
+    """Estrae gli oggetti JSON di primo livello da un file, ignorando ogni
+    involucro di testo (l'envelope <other-session untrusted="true"> con cui il
+    tool restituisce i dati di altre sessioni, note del tool, righe vuote)."""
+    dec = json.JSONDecoder()
+    i = 0
+    trovati = []
+    while i < len(testo):
+        i = testo.find("{", i)
+        if i < 0:
+            break
+        try:
+            obj, fine = dec.raw_decode(testo[i:])
+        except ValueError:
+            i += 1
+            continue
+        trovati.append(obj)
+        i += fine
+    return trovati
+
+
+def _voci(obj):
+    """Restituisce la lista di voci contenuta in un oggetto di risposta."""
+    if isinstance(obj, list):
+        return obj
+    if not isinstance(obj, dict):
+        return []
+    if "ccr" in obj and isinstance(obj["ccr"], dict):
+        obj = obj["ccr"]
+    for chiave in ("data", "sessions", "triggers", "items"):
+        if isinstance(obj.get(chiave), list):
+            return obj[chiave]
+    # una singola voce (get_session)
+    if "session_status" in obj or "cron_expression" in obj or "session_request" in obj:
+        return [obj]
+    return []
+
+
+def carica(percorsi):
+    sessioni, routine, ignorati = [], [], 0
+    visti = set()
+    for percorso in percorsi:
+        try:
+            with open(percorso, encoding="utf-8", errors="replace") as fh:
+                testo = fh.read()
+        except OSError as err:
+            sys.exit("non riesco a leggere %s: %s" % (percorso, err))
+        for obj in _oggetti_json(testo):
+            for voce in _voci(obj):
+                if not isinstance(voce, dict):
+                    continue
+                ident = voce.get("id") or ""
+                if ident in visti:
+                    continue
+                if "session_status" in voce or ident.startswith("session_"):
+                    visti.add(ident)
+                    sessioni.append(voce)
+                elif ident.startswith("trig_") or "session_request" in voce:
+                    visti.add(ident)
+                    routine.append(voce)
+                else:
+                    ignorati += 1
+    return sessioni, routine, ignorati
+
+
+# --- utilita' ---------------------------------------------------------------
+
+def _data(valore):
+    if not valore or not isinstance(valore, str):
+        return None
+    testo = valore.strip().replace("Z", "+00:00")
+    # i timestamp arrivano con i nanosecondi, datetime ne regge sei cifre
+    testo = re.sub(r"\.(\d{6})\d+", r".\1", testo)
+    try:
+        dt = datetime.fromisoformat(testo)
+    except ValueError:
+        return None
+    return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+
+
+def _giorni_fa(valore):
+    dt = _data(valore)
+    if dt is None:
+        return None
+    return (ADESSO - dt).total_seconds() / 86400.0
+
+
+def _mila(n):
+    return "{:,}".format(int(n)).replace(",", ".")
+
+
+def _giorni(n):
+    if n is None:
+        return "data sconosciuta"
+    n = int(n)
+    return "ieri" if n == 1 else ("oggi" if n == 0 else "%d giorni fa" % n)
+
+
+def _breve(testo, larghezza):
+    testo = " ".join((testo or "").split())
+    if len(testo) <= larghezza:
+        return testo.ljust(larghezza)
+    return testo[: larghezza - 1] + "…"
+
+
+# --- sessioni ---------------------------------------------------------------
+
+TITOLI_VUOTI = ("", "new session", "nuova sessione", "untitled", "senza titolo")
+
+
+def leggi_sessione(s):
+    meta = s.get("external_metadata") or {}
+    ctx = meta.get("context_usage") or {}
+    contesto = s.get("session_context") or {}
+    repos, rami = [], []
+    for uscita in contesto.get("outcomes") or []:
+        info = ((uscita or {}).get("git_repository") or {}).get("git_info") or {}
+        if info.get("repo") and info["repo"] not in repos:
+            repos.append(info["repo"])
+        for ramo in info.get("branches") or []:
+            if ramo not in rami:
+                rami.append(ramo)
+    repo = repos[0] if repos else ""
+    if len(repos) > 1:
+        repo += " (+%d repo)" % (len(repos) - 1)
+    if not repo:
+        for fonte in contesto.get("sources") or []:
+            url = ((fonte or {}).get("git_repository") or {}).get("url") or ""
+            if url:
+                repo = url.rstrip("/").split("/")[-2] + "/" + url.rstrip("/").split("/")[-1]
+                break
+    usati, massimo = ctx.get("used_tokens") or 0, ctx.get("max_tokens") or 0
+    uso = meta.get("usage") or {}
+    # post_turn_summary dice come si e' fermata: e' il campo che distingue
+    # "finita" da "ferma perche' aspetta una risposta dall'utente".
+    fine = s.get("post_turn_summary") or meta.get("post_turn_summary") or {}
+    return {
+        "id": s.get("id", ""),
+        "titolo": s.get("titolo") or s.get("title") or "",
+        "stato": (s.get("session_status") or "").replace("SESSION_STATUS_", "").lower(),
+        "esito": (s.get("status_bucket") or "").replace("SESSION_STATUS_BUCKET_", "").lower(),
+        "connessa": (s.get("connection_status") or "") == "connected",
+        "giorni": _giorni_fa(s.get("updated_at") or s.get("created_at")),
+        "repo": repo,
+        "repos": repos,
+        "rami": rami,
+        "contesto_usati": usati,
+        "contesto_max": massimo,
+        "contesto_quota": (usati / massimo) if massimo else 0.0,
+        "riassunto": (fine.get("status_detail") or s.get("task_summary")
+                      or meta.get("task_summary") or ""),
+        "aspetta": fine.get("needs_action") or "",
+        "costo": uso.get("cost_usd") or 0.0,
+        "token_letti": (uso.get("cache_read_tokens") or 0) + (uso.get("input_tokens") or 0),
+    }
+
+
+def valuta_sessione(v, giorni, mia):
+    """Assegna azione e motivo. Non decide mai da sola su lavoro vivo."""
+    if v["id"] and v["id"] == mia:
+        return "tieni", "e' la sessione da cui stai lavorando"
+    if v["stato"] == "archived":
+        return "gia' a posto", "gia' archiviata"
+    if v["stato"] == "running":
+        return "chiedi", "sta lavorando adesso: fermarla e' una decisione dell'utente"
+    if v["connessa"]:
+        return "chiedi", "container ancora connesso: probabilmente e' una scheda aperta ora"
+
+    vecchia = v["giorni"] is not None and v["giorni"] >= giorni
+    titolo_vuoto = v["titolo"].strip().lower() in TITOLI_VUOTI
+    ha_lavoro = bool(v["rami"])
+
+    if v["aspetta"] and not vecchia:
+        return "tieni", "ferma in attesa di una tua risposta: %s" % _breve(v["aspetta"], 70).strip()
+    if v["aspetta"] and vecchia and ha_lavoro:
+        return "compatta", "aspetta una tua risposta da %d giorni (%s)" % (
+            v["giorni"], _breve(v["aspetta"], 60).strip())
+    if v["aspetta"] and vecchia:
+        return "archivia", "aspetta da %d giorni una risposta che non e' arrivata" % v["giorni"]
+    if v["esito"] == "review_ready" and ha_lavoro:
+        dove = " / ".join(v["repos"]) if v["repos"] else "?"
+        return "verifica-pr", "dichiara il ramo %s su %s: cerca il ramo li' e guarda la PR" % (
+            v["rami"][0], dove)
+    if v["esito"] in ("blocked", "failed") and ha_lavoro:
+        if vecchia:
+            return "compatta", "lavoro non finito su %s, ferma da %d giorni: scheda di ripresa, poi archivia" % (v["rami"][0], v["giorni"])
+        return "tieni", "lavoro non finito ma recente"
+    if v["esito"] in ("blocked", "failed") and not ha_lavoro:
+        if vecchia:
+            return "archivia", "finita male senza produrre niente, ferma da %d giorni" % v["giorni"]
+        return "tieni", "finita male ma recente"
+    if v["contesto_quota"] >= 0.6:
+        return "compatta", "contesto al %d%%: riprenderla qui costa a ogni turno" % (v["contesto_quota"] * 100)
+    if titolo_vuoto and vecchia:
+        return "archivia", "senza titolo e senza lavoro salvato, ferma da %d giorni" % v["giorni"]
+    if vecchia:
+        return "archivia", "conclusa, ferma da %d giorni" % v["giorni"]
+    if titolo_vuoto:
+        return "rinomina", "titolo generico: dalle un nome prima di perderla di vista"
+    return "tieni", "recente"
+
+
+# --- routine ----------------------------------------------------------------
+
+def leggi_routine(t):
+    ultimo = t.get("last_run") or {}
+    derivato = t.get("derived_state") or {}
+    prompt = derivato.get("prompt") or ""
+    return {
+        "id": t.get("id", ""),
+        "nome": t.get("name") or "",
+        "attiva": bool(t.get("enabled")),
+        "cron": t.get("cron_expression") or "",
+        "una_volta": t.get("run_once_at") or "",
+        "finita_perche": t.get("ended_reason") or "",
+        "sospesa_perche": t.get("suspension_reason") or "",
+        "prossima": t.get("next_run_at") or "",
+        "ultimo_scatto": t.get("last_fired_at") or "",
+        "ultimo_esito": (ultimo.get("status") or "").replace("ROUTINE_RUN_STATUS_", "").lower(),
+        "sessione_fissa": bool(t.get("persist_session")) or bool(t.get("persistent_session_id")),
+        "modello": derivato.get("model") or "",
+        "ultima_sessione": ultimo.get("session_id") or "",
+        "prompt_caratteri": len(prompt),
+    }
+
+
+def valuta_routine(v):
+    if v["finita_perche"] == "run_once_fired":
+        return "elimina", "one-shot gia' scattata: residuo, non consuma nulla"
+    if v["finita_perche"].startswith("auto_disabled"):
+        return "elimina", "disattivata da sola (%s): residuo" % v["finita_perche"]
+    if v["sospesa_perche"]:
+        return "chiedi", "sospesa (%s): si riattiva da sola" % v["sospesa_perche"]
+    if not v["attiva"] and not v["finita_perche"]:
+        return "chiedi", "in pausa: eliminarla o riprenderla e' una scelta dell'utente"
+    if v["attiva"] and v["ultimo_esito"] == "failed":
+        return "ripara", ("ATTIVA e l'ultimo scatto e' FALLITO: leggi il motivo prima di toccarla"
+                          " (get_session su last_run.session_id)")
+    if v["attiva"] and v["sessione_fissa"] and v["cron"]:
+        return "verifica", "scatta a ripetizione dentro una sessione fissa: controlla che quella sessione esista ancora"
+    if v["attiva"] and not v["ultimo_esito"] and v["ultimo_scatto"]:
+        return "verifica", "e' scattata ma non risulta nessun esito"
+    if v["attiva"]:
+        return "tieni", "attiva e l'ultimo scatto e' andato a buon fine"
+    return "chiedi", "stato non deducibile dai dati"
+
+
+# --- stampa -----------------------------------------------------------------
+
+ORDINE_SESSIONI = ["chiedi", "verifica-pr", "compatta", "rinomina", "archivia", "tieni", "gia' a posto"]
+ORDINE_ROUTINE = ["ripara", "verifica", "chiedi", "elimina", "tieni"]
+
+
+def stampa_sessioni(voci):
+    if not voci:
+        return
+    print("SESSIONI (%d)" % len(voci))
+    print("%-13s %-6s %5s %5s  %-34s %s" % ("azione", "stato", "gg", "ctx", "repo / ramo", "titolo"))
+    for v, azione, motivo in voci:
+        eta = "%d" % v["giorni"] if v["giorni"] is not None else "?"
+        ctx = "%d%%" % (v["contesto_quota"] * 100) if v["contesto_quota"] else "-"
+        dove = v["repo"] + ("  " + v["rami"][0] if v["rami"] else "")
+        print("%-13s %-6s %5s %5s  %-34s %s" % (
+            azione, v["stato"][:6], eta, ctx, _breve(dove, 34), _breve(v["titolo"], 44)))
+        coda = ""
+        if v["costo"] or v["token_letti"]:
+            coda = "  (finora $%.2f, %s token letti)" % (v["costo"], _mila(v["token_letti"]))
+        print("%13s %s  [%s]%s" % ("", motivo, v["id"], coda))
+    print()
+
+
+def stampa_routine(voci):
+    if not voci:
+        return
+    print("ROUTINE (%d)" % len(voci))
+    print("%-9s %-4s %-12s %-9s %s" % ("azione", "on", "cadenza", "ult.esito", "nome"))
+    for v, azione, motivo in voci:
+        cadenza = v["cron"] or ("una volta" if v["una_volta"] else "-")
+        print("%-9s %-4s %-12s %-9s %s" % (
+            azione, "si" if v["attiva"] else "no", _breve(cadenza, 12),
+            v["ultimo_esito"] or "-", _breve(v["nome"], 46)))
+        print("%9s %s  [%s]" % ("", motivo, v["id"]))
+    print()
+
+
+# --- comandi ----------------------------------------------------------------
+
+def raccogli(args):
+    sessioni, routine, ignorati = carica(args.file)
+    vs = [(v, *valuta_sessione(v, args.giorni, args.io))
+          for v in (leggi_sessione(s) for s in sessioni)]
+    vr = [(v, *valuta_routine(v)) for v in (leggi_routine(t) for t in routine)]
+    vs.sort(key=lambda x: (ORDINE_SESSIONI.index(x[1]) if x[1] in ORDINE_SESSIONI else 99,
+                           -(x[0]["giorni"] or 0)))
+    vr.sort(key=lambda x: ORDINE_ROUTINE.index(x[1]) if x[1] in ORDINE_ROUTINE else 99)
+    return vs, vr, ignorati
+
+
+def cmd_analizza(args):
+    vs, vr, ignorati = raccogli(args)
+    if args.json:
+        print(json.dumps({
+            "sessioni": [dict(v, azione=a, motivo=m) for v, a, m in vs],
+            "routine": [dict(v, azione=a, motivo=m) for v, a, m in vr],
+        }, ensure_ascii=False, indent=1))
+        return 0
+    stampa_sessioni(vs)
+    stampa_routine(vr)
+    if ignorati:
+        print("(%d voci non riconosciute, ignorate)" % ignorati)
+    if not vs and not vr:
+        print("nessuna sessione e nessuna routine nei file passati.")
+        print("controlla di aver salvato l'output di list_sessions / list_triggers.")
+        return 1
+    return 0
+
+
+def cmd_piano(args):
+    vs, vr, _ = raccogli(args)
+    per_azione = {}
+    for v, azione, motivo in vs:
+        per_azione.setdefault(azione, []).append((v, motivo))
+    per_azione_r = {}
+    for v, azione, motivo in vr:
+        per_azione_r.setdefault(azione, []).append((v, motivo))
+
+    print("PIANO DI RIORDINO")
+    print("=" * 60)
+    print()
+
+    print("1. ROUTINE ATTIVE CON L'ULTIMO SCATTO FALLITO  -  guarda prima il motivo")
+    rip = per_azione_r.get("ripara", [])
+    if not rip:
+        print("   nessuna: nessuna routine attiva risulta fallita all'ultimo scatto.")
+    for v, motivo in rip:
+        sessione = (v["ultima_sessione"] or "?")
+        print("   [%s] %s" % (v["id"], v["nome"]))
+        print("      cadenza %s, modello %s, ultimo esito FALLITO" % (v["cron"] or "una volta", v["modello"] or "?"))
+        print("      -> get_session %s   e leggi post_turn_summary.status_detail:" % sessione)
+        print("         limite d'uso raggiunto ('hit your weekly/session limit') -> NON e' spreco,")
+        print("           lo scatto e' stato rifiutato prima di partire: non spegnerla, e' la")
+        print("           spia che la quota se la sta prendendo altro.")
+        print("         errore vero (connettore, prompt, strumento) -> quello si' che consuma")
+        print("           a ogni scatto: correggi (update_trigger prompt) o spegni")
+        print("           (update_trigger enabled:false).")
+    print()
+
+    print("2. ROUTINE RESIDUE  -  ordine, nessun risparmio")
+    eli = per_azione_r.get("elimina", [])
+    if not eli:
+        print("   nessuna.")
+    for v, motivo in eli:
+        print("   delete_trigger %s   # %s  (%s)" % (v["id"], _breve(v["nome"], 40).strip(), motivo))
+    for v, motivo in per_azione_r.get("verifica", []) + per_azione_r.get("chiedi", []):
+        print("   da chiarire: %s  # %s" % (v["id"], motivo))
+    print()
+
+    print("3. SESSIONI DA ARCHIVIARE  -  ordine, e libera i container")
+    arc = per_azione.get("archivia", [])
+    if not arc:
+        print("   nessuna.")
+    for v, motivo in arc:
+        print("   archive_session %s   # %s" % (v["id"], _breve(v["titolo"] or "senza titolo", 44).strip()))
+    print()
+
+    print("4. SESSIONI DA COMPATTARE  -  scheda di ripresa, poi archivia")
+    com = per_azione.get("compatta", [])
+    if not com:
+        print("   nessuna.")
+    for v, motivo in com:
+        print("   %s  %s" % (v["id"], _breve(v["titolo"] or "senza titolo", 44).strip()))
+        print("      %s" % motivo)
+        print("      -> cloud scheda <dump> --id %s" % v["id"])
+    print()
+
+    print("5. DA CONTROLLARE PRIMA DI TOCCARE")
+    if per_azione.get("verifica-pr"):
+        print("   Il ramo qui sotto e' quello che la sessione DICHIARA di aver prodotto.")
+        print("   Prima della PR verifica che esista davvero sul remoto (git ls-remote,")
+        print("   o list_branches): un ramo mai spinto e' lavoro perso col container.")
+    resto = (per_azione.get("verifica-pr", []) + per_azione.get("chiedi", [])
+             + per_azione.get("rinomina", []))
+    if not resto:
+        print("   niente.")
+    for v, motivo in resto:
+        print("   %s  %s" % (v["id"], _breve(v["titolo"] or "senza titolo", 44).strip()))
+        print("      %s" % motivo)
+    print()
+
+    costose = sorted((v for v, _, _ in vs if v["costo"]),
+                     key=lambda v: -v["costo"])[:5]
+    if costose:
+        print("6. LE PIU' COSTOSE FINORA  -  gia' speso, non recuperabile")
+        for v in costose:
+            print("   $%6.2f  %s token letti  %s" % (
+                v["costo"], _mila(v["token_letti"]),
+                _breve(v["titolo"] or "senza titolo", 40).strip()))
+        print("   Questo e' quanto e' costato arrivare fin qui, non quanto costa")
+        print("   tenerle aperte: una sessione ferma non consuma niente. Conta solo")
+        print("   se hai intenzione di riprenderle: in quel caso, compattale prima.")
+        print()
+
+    tenute = len(per_azione.get("tieni", []))
+    gia = len(per_azione.get("gia' a posto", []))
+    print("Restano intatte: %d %s, %d gia' archiviate." % (
+        tenute, "sessione viva" if tenute == 1 else "sessioni vive", gia))
+    print()
+    print("Archiviare e' reversibile (unarchive_session). Cancellare una sessione")
+    print("non e' possibile: non esiste uno strumento che lo faccia.")
+    return 0
+
+
+MODELLO_SCHEDA = """# Scheda di ripresa - {titolo}
+
+Sessione originale: `{id}`
+Ultimo aggiornamento: {aggiornata} ({giorni})
+Repository: {repo}
+Ramo prodotto: {rami}
+Contesto consumato: {ctx}
+Ultimo passo noto: {riassunto}
+Era in attesa di: {aspetta}
+
+## Cosa era stato deciso
+<!-- da compilare leggendo commit, PR e descrizione del ramo: solo fatti verificati -->
+
+## Cosa e' gia' fatto
+<!-- elenco dei commit / file toccati -->
+
+## Cosa manca
+<!-- il prossimo passo concreto -->
+
+## Cosa NON va rifatto
+<!-- strade gia' provate e scartate, con il motivo -->
+
+---
+Aperta una sessione nuova su questo lavoro, parti da questa scheda: costa
+qualche migliaio di token invece del contesto intero di quella vecchia.
+"""
+
+
+def cmd_scheda(args):
+    sessioni, _, _ = carica(args.file)
+    trovata, grezza = None, None
+    for s in sessioni:
+        v = leggi_sessione(s)
+        if v["id"] == args.id:
+            trovata, grezza = v, s
+            break
+    if trovata is None:
+        sys.exit("sessione %s non trovata nei file passati" % args.id)
+    testo = MODELLO_SCHEDA.format(
+        titolo=trovata["titolo"] or "senza titolo",
+        id=trovata["id"],
+        aggiornata=(_data(grezza.get("updated_at")) or ADESSO).strftime("%Y-%m-%d %H:%M UTC"),
+        giorni=_giorni(trovata["giorni"]),
+        repo=trovata["repo"] or "-",
+        rami=", ".join(trovata["rami"]) or "-",
+        ctx=("%d%% di %d token" % (trovata["contesto_quota"] * 100, trovata["contesto_max"]))
+            if trovata["contesto_max"] else "non riportato",
+        riassunto=trovata["riassunto"] or "-",
+        aspetta=trovata["aspetta"] or "-",
+    )
+    if args.out:
+        os.makedirs(os.path.dirname(os.path.abspath(args.out)), exist_ok=True)
+        with open(args.out, "w", encoding="utf-8") as fh:
+            fh.write(testo)
+        print("scritta: %s" % args.out)
+    else:
+        print(testo)
+    return 0
+
+
+def main(argv=None):
+    p = argparse.ArgumentParser(prog="cloud", description=__doc__,
+                                formatter_class=argparse.RawDescriptionHelpFormatter)
+    sub = p.add_subparsers(dest="comando", required=True)
+
+    def comune(sp):
+        sp.add_argument("file", nargs="+", help="dump JSON di list_sessions / list_triggers")
+        sp.add_argument("--giorni", type=int, default=14,
+                        help="da quanti giorni di inattivita' una sessione e' vecchia (14)")
+        sp.add_argument("--io", default=os.environ.get("CLOUD_SESSIONE_CORRENTE", ""),
+                        help="id della sessione corrente, da non toccare mai")
+        sp.add_argument("--json", action="store_true", help="output JSON")
+
+    comune(sub.add_parser("analizza", help="tabella di sessioni e routine con l'azione proposta"))
+    comune(sub.add_parser("piano", help="piano di riordino eseguibile"))
+    sp = sub.add_parser("scheda", help="scheda di ripresa per una sessione da compattare")
+    sp.add_argument("file", nargs="+")
+    sp.add_argument("--id", required=True, help="id della sessione")
+    sp.add_argument("--out", help="file su cui scrivere")
+    sp.add_argument("--giorni", type=int, default=14)
+    sp.add_argument("--io", default="")
+    sp.add_argument("--json", action="store_true")
+
+    args = p.parse_args(argv)
+    return {"analizza": cmd_analizza, "piano": cmd_piano, "scheda": cmd_scheda}[args.comando](args)
+
+
+if __name__ == "__main__":
+    sys.exit(main())
