@@ -14,6 +14,7 @@ riutilizzabili e non appesantiscono il codice delle applicazioni.
 | `skills/nas-synology` | entra nel NAS Synology e lo gestisce: dischi, spazio, file, pacchetti, backup, log |
 | `skills/regia` | fa eseguire il lavoro all'altro modello mentre tu fai la regia: brief, schemi JSON, esecuzione in parallelo, contraddittorio, registro |
 | `skills/cloud-ordinato` | mette in ordine il cloud di Claude Code: sessioni da archiviare, lavori da compattare, Routine che consumano a vuoto |
+| `skills/kits` | conversione voce-a-voce con l'API di Kits.ai: elenca i modelli vocali e converte file WAV/MP3 con il modello scelto |
 
 | Preset | A cosa serve |
 |---|---|
@@ -278,6 +279,15 @@ skills/cloud-ordinato/tests/run-tests.sh
 
 46 prove su dump finti, nessuna tocca il cloud.
 
+## Skill Kits.ai
+
+`kits` è autonoma: il client Python completo è in `skills/kits/scripts/`, serve
+solo `requests`. Per funzionare serve una `KITS_API_KEY` (da
+[app.kits.ai](https://app.kits.ai), sezione API), da mettere nell'ambiente di
+chi usa la skill (variabili dell'environment cloud o `.env` locale), mai in
+questo repository. Copre solo la conversione voce-a-voce: l'API TTS di Kits è
+stata dismessa il 22/09/2025.
+
 ## Licenze
 
 Ogni skill mantiene la licenza originale, nel file `LICENSE` della sua cartella.
@@ -290,4 +300,5 @@ Ogni skill mantiene la licenza originale, nel file `LICENSE` della sua cartella.
 - `regia` — MIT, di Dario Palazzolo.
 - `nas-synology` — MIT, scritta per questo repository.
 - `cloud-ordinato` — MIT, scritta per questo repository.
+- `kits` — MIT, scritta per questo repository.
 
