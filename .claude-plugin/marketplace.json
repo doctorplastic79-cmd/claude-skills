@@ -33,6 +33,11 @@
       "name": "regia",
       "source": "./skills/regia",
       "description": "Fa eseguire il lavoro all'altro modello mentre tu fai la regia: da Claude delega a ChatGPT (CLI codex), da Codex delega a Claude. Brief, schemi JSON, esecuzione in parallelo, contraddittorio, registro dei lavori."
+    },
+    {
+      "name": "cloud-ordinato",
+      "source": "./skills/cloud-ordinato",
+      "description": "Riordina il cloud di Claude Code: archivia le sessioni concluse, prepara la scheda di ripresa per i lavori a meta', trova le Routine che scattano e falliscono consumando token."
     }
   ]
 }
